@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection.Emit;
 using System.Text;
 using System.Threading.Tasks;
 using TableManagement.Core.Entities;
@@ -20,9 +21,34 @@ namespace TableManagement.Infrastructure.Data
         public DbSet<CustomColumn> CustomColumns { get; set; }
         public DbSet<CustomTableData> CustomTableData { get; set; }
 
+        public DbSet<SecurityLog> SecurityLogs { get; set; }
+
         protected override void OnModelCreating(ModelBuilder builder)
         {
             base.OnModelCreating(builder);
+
+            
+
+            // SecurityLog entity konfigürasyonu
+            builder.Entity<SecurityLog>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.Timestamp).IsRequired();
+                entity.Property(e => e.IpAddress).HasMaxLength(45).IsRequired();
+                entity.Property(e => e.ThreatType).HasMaxLength(100).IsRequired();
+                entity.Property(e => e.RequestPath).HasMaxLength(500).IsRequired();
+                entity.Property(e => e.RequestMethod).HasMaxLength(10).IsRequired();
+                entity.Property(e => e.UserAgent).HasMaxLength(1000).IsRequired();
+                entity.Property(e => e.UserId).HasMaxLength(450);
+
+                // Index'ler
+                entity.HasIndex(e => e.Timestamp);
+                entity.HasIndex(e => e.IpAddress);
+                entity.HasIndex(e => e.ThreatType);
+                entity.HasIndex(e => e.IsBlocked);
+                entity.HasIndex(e => new { e.IpAddress, e.Timestamp });
+            });
+
 
             // User Configuration
             builder.Entity<User>(entity =>

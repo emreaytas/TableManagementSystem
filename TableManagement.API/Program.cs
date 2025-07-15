@@ -1,175 +1,264 @@
+// Program.cs
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using Serilog;
+using Serilog.Events;
 using System.Text;
-using TableManagement.Core.Entities;
-using TableManagement.Infrastructure;
-using TableManagement.Infrastructure.Data;
-using TableManagement.Application;
+using TableManagement.API.Middleware;
 using TableManagement.Application.Services;
-using FluentValidation.AspNetCore;
-using FluentValidation;
+using TableManagement.Core.Entities;
+using TableManagement.Core.Interfaces;
+using TableManagement.Infrastructure.Data;
+using TableManagement.Infrastructure.Repositories;
+
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Configure Logging
-builder.Logging.ClearProviders();
-builder.Logging.AddConsole();
-builder.Logging.AddDebug();
+// Serilog konfigürasyonu
+Log.Logger = new LoggerConfiguration()
+    .ReadFrom.Configuration(builder.Configuration)
+    .Enrich.FromLogContext()
+    .Enrich.WithProperty("Application", "TableManagement.API")
+    .Enrich.WithProperty("Environment", builder.Environment.EnvironmentName)
+    .CreateLogger();
 
-// Add services to the container.
-builder.Services.AddControllers()
-    .AddFluentValidation(fv =>
-    {
-        fv.RegisterValidatorsFromAssemblyContaining<Program>();
-        fv.ImplicitlyValidateChildProperties = true;
-    });
+// Host'u Serilog kullanacak þekilde yapýlandýr
+builder.Host.UseSerilog();
 
-builder.Services.AddEndpointsApiExplorer();
-
-// Swagger Configuration with JWT Support
-builder.Services.AddSwaggerGen(options =>
+try
 {
-    options.SwaggerDoc("v1", new OpenApiInfo
-    {
-        Title = "Table Management API",
-        Version = "v1",
-        Description = "Tablo Yönetim Sistemi API Dokümantasyonu",
-        Contact = new OpenApiContact
-        {
-            Name = "Support Team",
-            Email = "support@tablemanagement.com"
-        }
-    });
+    Log.Information("Starting up TableManagement API");
 
-    // JWT Security Definition
-    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
-    {
-        Description = "JWT Authorization header using the Bearer scheme. \r\n\r\n" +
-                      "Enter 'Bearer' [space] and then your token in the text input below.\r\n\r\n" +
-                      "Example: 'Bearer 12345abcdef'",
-        Name = "Authorization",
-        In = ParameterLocation.Header,
-        Type = SecuritySchemeType.ApiKey,
-        Scheme = "Bearer",
-        BearerFormat = "JWT"
-    });
+    // Add services to the container.
+    builder.Services.AddControllers();
 
-    // JWT Security Requirement
-    options.AddSecurityRequirement(new OpenApiSecurityRequirement
+    // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
+    builder.Services.AddEndpointsApiExplorer();
+    builder.Services.AddSwaggerGen(c =>
     {
+        c.SwaggerDoc("v1", new OpenApiInfo { Title = "Table Management API", Version = "v1" });
+
+        // JWT Authentication için Swagger konfigürasyonu
+        c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
         {
-            new OpenApiSecurityScheme
+            Description = "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\"",
+            Name = "Authorization",
+            In = ParameterLocation.Header,
+            Type = SecuritySchemeType.Http,
+            Scheme = "bearer",
+            BearerFormat = "JWT"
+        });
+
+        c.AddSecurityRequirement(new OpenApiSecurityRequirement
+        {
             {
-                Reference = new OpenApiReference
+                new OpenApiSecurityScheme
                 {
-                    Type = ReferenceType.SecurityScheme,
-                    Id = "Bearer"
+                    Reference = new OpenApiReference
+                    {
+                        Type = ReferenceType.SecurityScheme,
+                        Id = "Bearer"
+                    }
                 },
-                Scheme = "oauth2",
-                Name = "Bearer",
-                In = ParameterLocation.Header
-            },
-            new List<string>()
-        }
+                Array.Empty<string>()
+            }
+        });
     });
 
-    // Include XML comments if available
-    var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
-    var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
-    if (File.Exists(xmlPath))
+    // Database context
+    builder.Services.AddDbContext<ApplicationDbContext>(options =>
+        options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+
+    // Identity (int key kullanýmý için düzeltildi)
+    builder.Services.AddIdentity<User, IdentityRole<int>>(options =>
     {
-        options.IncludeXmlComments(xmlPath);
+        options.Password.RequireDigit = true;
+        options.Password.RequiredLength = 6;
+        options.Password.RequireNonAlphanumeric = false;
+        options.Password.RequireUppercase = true;
+        options.Password.RequireLowercase = true;
+
+        options.User.RequireUniqueEmail = true;
+        options.SignIn.RequireConfirmedEmail = true;
+
+        options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(30);
+        options.Lockout.MaxFailedAccessAttempts = 5;
+    })
+    .AddEntityFrameworkStores<ApplicationDbContext>()
+    .AddDefaultTokenProviders();
+
+    // JWT Authentication
+    var jwtSettings = builder.Configuration.GetSection("JwtSettings");
+    var secretKey = jwtSettings["SecretKey"];
+
+    builder.Services.AddAuthentication(options =>
+    {
+        options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
+            ValidateIssuer = false,
+            ValidateAudience = false,
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.Zero
+        };
+
+        // JWT events için loglama
+        options.Events = new JwtBearerEvents
+        {
+            OnAuthenticationFailed = context =>
+            {
+                Log.Warning("JWT Authentication failed: {Error}", context.Exception.Message);
+                return Task.CompletedTask;
+            },
+            OnChallenge = context =>
+            {
+                Log.Warning("JWT Challenge for {Path} from {IP}",
+                    context.Request.Path,
+                    context.Request.HttpContext.Connection.RemoteIpAddress);
+                return Task.CompletedTask;
+            },
+            OnTokenValidated = context =>
+            {
+                Log.Information("JWT Token validated for user {User}",
+                    context.Principal?.Identity?.Name ?? "Unknown");
+                return Task.CompletedTask;
+            }
+        };
+    });
+
+    // AutoMapper
+    builder.Services.AddAutoMapper(typeof(Program));
+
+    // Repository pattern
+    builder.Services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
+    builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
+
+    // Services
+    builder.Services.AddScoped<IAuthService, AuthService>();
+    builder.Services.AddScoped<IEmailService, EmailService>();
+    builder.Services.AddScoped<ISecurityLogService, SecurityLogService>();
+
+    // CORS
+    builder.Services.AddCors(options =>
+    {
+        options.AddPolicy("AllowSpecificOrigin", policy =>
+        {
+            policy.WithOrigins(builder.Configuration["FrontendSettings:BaseUrl"])
+                  .AllowAnyHeader()
+                  .AllowAnyMethod()
+                  .AllowCredentials();
+        });
+    });
+
+    // HTTP Logging (ek loglama için)
+    builder.Services.AddHttpLogging(logging =>
+    {
+        logging.LoggingFields = Microsoft.AspNetCore.HttpLogging.HttpLoggingFields.All;
+        logging.RequestHeaders.Add("X-Forwarded-For");
+        logging.RequestHeaders.Add("X-Real-IP");
+        logging.ResponseHeaders.Add("X-Response-Time");
+        logging.MediaTypeOptions.AddText("application/json");
+        logging.RequestBodyLogLimit = 4096;
+        logging.ResponseBodyLogLimit = 4096;
+    });
+
+    var app = builder.Build();
+
+    // Configure the HTTP request pipeline.
+    if (app.Environment.IsDevelopment())
+    {
+        app.UseSwagger();
+        app.UseSwaggerUI();
+        app.UseDeveloperExceptionPage();
+    }
+    else
+    {
+        app.UseExceptionHandler("/Error");
+        app.UseHsts();
     }
 
-    // Custom schema IDs to avoid conflicts
-    options.CustomSchemaIds(type => type.FullName);
-});
+    app.UseHttpsRedirection();
 
-// Add Layer Dependencies
-builder.Services.AddInfrastructure(builder.Configuration);
-builder.Services.AddApplication();
-
-// Add Email Service
-builder.Services.AddScoped<IEmailService, EmailService>();
-
-// Add Identity
-builder.Services.AddIdentity<User, IdentityRole<int>>(options =>
-{
-    options.Password.RequireDigit = true;
-    options.Password.RequireLowercase = true;
-    options.Password.RequireUppercase = true;
-    options.Password.RequireNonAlphanumeric = false;
-    options.Password.RequiredLength = 6;
-    options.User.RequireUniqueEmail = true;
-
-    // Email confirmation settings
-    options.SignIn.RequireConfirmedEmail = true;
-    options.Tokens.EmailConfirmationTokenProvider = TokenOptions.DefaultEmailProvider;
-})
-.AddEntityFrameworkStores<ApplicationDbContext>()
-.AddDefaultTokenProviders();
-
-// Add JWT Authentication
-var jwtSettings = builder.Configuration.GetSection("JwtSettings");
-builder.Services.AddAuthentication(options =>
-{
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-})
-.AddJwtBearer(options =>
-{
-    options.TokenValidationParameters = new TokenValidationParameters
+    // Serilog için HTTP request loglama
+    app.UseSerilogRequestLogging(options =>
     {
-        ValidateIssuerSigningKey = true,
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.ASCII.GetBytes(jwtSettings["SecretKey"])),
-        ValidateIssuer = false,
-        ValidateAudience = false,
-        ValidateLifetime = true,
-        ClockSkew = TimeSpan.Zero
-    };
-});
+        options.MessageTemplate = "HTTP {RequestMethod} {RequestPath} responded {StatusCode} in {Elapsed:0.0000} ms";
+        options.GetLevel = (httpContext, elapsed, ex) =>
+        {
+            if (ex != null) return LogEventLevel.Error;
+            if (httpContext.Response.StatusCode > 499) return LogEventLevel.Error;
+            if (httpContext.Response.StatusCode > 399) return LogEventLevel.Warning;
+            if (elapsed > 10000) return LogEventLevel.Warning; // 10 saniyeden uzun istekler
+            return LogEventLevel.Information;
+        };
+        options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
+        {
+            diagnosticContext.Set("RequestHost", httpContext.Request.Host.Value);
+            diagnosticContext.Set("RequestScheme", httpContext.Request.Scheme);
+            diagnosticContext.Set("UserAgent", httpContext.Request.Headers["User-Agent"].FirstOrDefault());
+            diagnosticContext.Set("ClientIP", GetClientIPAddress(httpContext));
 
-// Add CORS
-builder.Services.AddCors(options =>
-{
-    options.AddPolicy("AllowVueApp", policy =>
-    {
-        policy.WithOrigins("http://localhost:5173", "http://localhost:3000")
-              .AllowAnyHeader()
-              .AllowAnyMethod()
-              .AllowCredentials();
+            if (httpContext.User.Identity?.IsAuthenticated == true)
+            {
+                diagnosticContext.Set("UserId", httpContext.User.Identity.Name);
+            }
+        };
     });
-});
 
-var app = builder.Build();
+    // Custom middleware'ler (sýralama önemli!)
+    app.UseMiddleware<SecurityMiddleware>();        // Ýlk önce güvenlik kontrolü
+    app.UseMiddleware<RequestLoggingMiddleware>();  // Sonra detaylý loglama
 
-// Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI(options =>
+    // Built-in HTTP logging (opsiyonel, development için)
+    if (app.Environment.IsDevelopment())
     {
-        options.SwaggerEndpoint("/swagger/v1/swagger.json", "Table Management API v1");
-        options.DocumentTitle = "Table Management API";
-        options.DefaultModelsExpandDepth(-1); // Modelleri varsayýlan olarak gizle
-        options.DefaultModelExpandDepth(2);
-        options.DisplayRequestDuration();
-        options.EnableTryItOutByDefault();
+        app.UseHttpLogging();
+    }
 
-        // Custom CSS for better appearance
-        options.InjectStylesheet("/swagger-ui/custom.css");
-    });
+    app.UseCors("AllowSpecificOrigin");
+
+    app.UseAuthentication();
+    app.UseAuthorization();
+
+    app.MapControllers();
+
+    // Startup log
+    Log.Information("TableManagement API started successfully");
+
+    app.Run();
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "Application terminated unexpectedly");
+}
+finally
+{
+    Log.CloseAndFlush();
 }
 
-app.UseHttpsRedirection();
+// Helper method for IP address extraction
+static string GetClientIPAddress(HttpContext context)
+{
+    var xForwardedFor = context.Request.Headers["X-Forwarded-For"].FirstOrDefault();
+    if (!string.IsNullOrEmpty(xForwardedFor))
+    {
+        return xForwardedFor.Split(',')[0].Trim();
+    }
 
-app.UseCors("AllowVueApp");
+    var xRealIP = context.Request.Headers["X-Real-IP"].FirstOrDefault();
+    if (!string.IsNullOrEmpty(xRealIP))
+    {
+        return xRealIP;
+    }
 
-app.UseAuthentication();
-app.UseAuthorization();
-
-app.MapControllers();
-
-app.Run();
+    return context.Connection.RemoteIpAddress?.ToString() ?? "Unknown";
+}

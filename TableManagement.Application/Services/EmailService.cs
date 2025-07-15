@@ -4,10 +4,17 @@ using System.Net.Mail;
 
 namespace TableManagement.Application.Services
 {
+
+
     public class EmailService : IEmailService
     {
+
+
+
         private readonly IConfiguration _configuration;
         private readonly SmtpClient _smtpClient;
+
+
 
         public EmailService(IConfiguration configuration)
         {

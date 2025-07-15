@@ -8,7 +8,6 @@ using System.Text;
 using System.Threading.Tasks;
 using TableManagement.Core.Entities;
 
-
 namespace TableManagement.Infrastructure.Data
 {
     public class ApplicationDbContext : IdentityDbContext<User, IdentityRole<int>, int>
@@ -16,7 +15,6 @@ namespace TableManagement.Infrastructure.Data
         public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options)
         {
         }
-
 
         public DbSet<CustomTable> CustomTables { get; set; }
         public DbSet<CustomColumn> CustomColumns { get; set; }
@@ -46,7 +44,7 @@ namespace TableManagement.Infrastructure.Data
             {
                 entity.HasKey(e => e.Id);
                 entity.Property(e => e.TableName).IsRequired().HasMaxLength(100);
-                entity.Property(e => e.Description).HasMaxLength(500);
+                entity.Property(e => e.Description).HasMaxLength(500); // Required kaldırıldı - nullable
                 entity.Property(e => e.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
                 entity.HasQueryFilter(e => !e.IsDeleted);
 
@@ -74,7 +72,7 @@ namespace TableManagement.Infrastructure.Data
                 entity.HasKey(e => e.Id);
                 entity.Property(e => e.ColumnName).IsRequired().HasMaxLength(100);
                 entity.Property(e => e.DataType).IsRequired();
-                entity.Property(e => e.DefaultValue).HasMaxLength(255);
+                entity.Property(e => e.DefaultValue).HasMaxLength(255); // Nullable olarak bırakıldı
                 entity.Property(e => e.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
                 entity.HasQueryFilter(e => !e.IsDeleted);
 
@@ -90,7 +88,7 @@ namespace TableManagement.Infrastructure.Data
             builder.Entity<CustomTableData>(entity =>
             {
                 entity.HasKey(e => e.Id);
-                entity.Property(e => e.Value).HasMaxLength(1000);
+                entity.Property(e => e.Value).HasMaxLength(1000); // Nullable olarak bırakıldı
                 entity.Property(e => e.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
                 entity.HasQueryFilter(e => !e.IsDeleted);
 
@@ -117,6 +115,4 @@ namespace TableManagement.Infrastructure.Data
             builder.Entity<IdentityRoleClaim<int>>().ToTable("RoleClaims");
         }
     }
-
-
 }

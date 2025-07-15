@@ -11,6 +11,7 @@ using TableManagement.Core.Interfaces;
 using AutoMapper;
 using System.Web;
 using TableManagement.Core.DTOs.Requests;
+using Microsoft.Extensions.Logging;
 
 namespace TableManagement.Application.Services
 {
@@ -22,6 +23,7 @@ namespace TableManagement.Application.Services
         private readonly IMapper _mapper;
         private readonly IUnitOfWork _unitOfWork;
         private readonly IEmailService _emailService;
+        private readonly ILogger<AuthService> _logger;
 
         public AuthService(
             UserManager<User> userManager,
@@ -29,7 +31,8 @@ namespace TableManagement.Application.Services
             IConfiguration configuration,
             IMapper mapper,
             IUnitOfWork unitOfWork,
-            IEmailService emailService)
+            IEmailService emailService,
+            ILogger<AuthService> logger)
         {
             _userManager = userManager;
             _signInManager = signInManager;
@@ -37,6 +40,7 @@ namespace TableManagement.Application.Services
             _mapper = mapper;
             _unitOfWork = unitOfWork;
             _emailService = emailService;
+            _logger = logger;
         }
 
         public async Task<AuthResponse> RegisterAsync(RegisterRequest request)
@@ -81,10 +85,14 @@ namespace TableManagement.Application.Services
                 var emailConfirmationToken = await _userManager.GenerateEmailConfirmationTokenAsync(user);
 
                 // Create confirmation link
-                var frontendUrl = _configuration["FrontendSettings:BaseUrl"] ?? "http://localhost:5173";
+                var baseUrl = _configuration["FrontendSettings:BaseUrl"] ?? "http://localhost:5173";
                 var encodedToken = HttpUtility.UrlEncode(emailConfirmationToken);
                 var encodedEmail = HttpUtility.UrlEncode(user.Email);
-                var confirmationLink = $"{frontendUrl}/confirm-email?token={encodedToken}&email={encodedEmail}";
+
+                // Backend endpoint kullan - GET endpoint
+                var confirmationLink = $"{_configuration["ApiSettings:BaseUrl"] ?? "https://localhost:7018"}/api/auth/confirm-email?token={encodedToken}&email={encodedEmail}";
+
+                _logger.LogInformation($"Generated confirmation link: {confirmationLink}");
 
                 // Send confirmation email
                 var emailSent = await _emailService.SendEmailConfirmationAsync(
@@ -95,7 +103,6 @@ namespace TableManagement.Application.Services
 
                 if (!emailSent)
                 {
-                    // Email gönderilemedi ama kullanıcı oluşturuldu
                     return new AuthResponse
                     {
                         Success = true,
@@ -113,6 +120,7 @@ namespace TableManagement.Application.Services
             }
             catch (Exception ex)
             {
+                _logger.LogError(ex, "Registration error occurred");
                 return new AuthResponse { Success = false, Message = "Kayıt sırasında bir hata oluştu." };
             }
         }
@@ -155,6 +163,7 @@ namespace TableManagement.Application.Services
             }
             catch (Exception ex)
             {
+                _logger.LogError(ex, "Login error occurred");
                 return new AuthResponse { Success = false, Message = "Giriş sırasında bir hata oluştu." };
             }
         }
@@ -163,20 +172,33 @@ namespace TableManagement.Application.Services
         {
             try
             {
+                _logger.LogInformation($"Email confirmation attempt for: {email}");
+                _logger.LogInformation($"Token received: {token?.Substring(0, Math.Min(20, token?.Length ?? 0))}...");
+
                 var user = await _userManager.FindByEmailAsync(email);
                 if (user == null)
                 {
+                    _logger.LogWarning($"User not found for email: {email}");
                     return new AuthResponse { Success = false, Message = "Kullanıcı bulunamadı." };
                 }
 
+                _logger.LogInformation($"User found: {user.UserName}, Current EmailConfirmed: {user.EmailConfirmed}");
+
                 if (user.EmailConfirmed)
                 {
-                    return new AuthResponse { Success = false, Message = "Email adresi zaten doğrulanmış." };
+                    _logger.LogInformation($"Email already confirmed for user: {user.UserName}");
+                    return new AuthResponse { Success = true, Message = "Email adresi zaten doğrulanmış." };
                 }
 
                 var result = await _userManager.ConfirmEmailAsync(user, token);
                 if (!result.Succeeded)
                 {
+                    _logger.LogError($"Email confirmation failed for user: {user.UserName}");
+                    foreach (var error in result.Errors)
+                    {
+                        _logger.LogError($"Error: {error.Code} - {error.Description}");
+                    }
+
                     return new AuthResponse
                     {
                         Success = false,
@@ -186,7 +208,14 @@ namespace TableManagement.Application.Services
 
                 // Kullanıcının IsEmailConfirmed özelliğini de güncelle
                 user.IsEmailConfirmed = true;
-                await _userManager.UpdateAsync(user);
+                var updateResult = await _userManager.UpdateAsync(user);
+
+                if (!updateResult.Succeeded)
+                {
+                    _logger.LogError($"Failed to update IsEmailConfirmed for user: {user.UserName}");
+                }
+
+                _logger.LogInformation($"Email confirmation successful for user: {user.UserName}");
 
                 return new AuthResponse
                 {
@@ -197,6 +226,7 @@ namespace TableManagement.Application.Services
             }
             catch (Exception ex)
             {
+                _logger.LogError(ex, $"Email confirmation error for email: {email}");
                 return new AuthResponse { Success = false, Message = "Email doğrulama sırasında bir hata oluştu." };
             }
         }
@@ -220,10 +250,10 @@ namespace TableManagement.Application.Services
                 var emailConfirmationToken = await _userManager.GenerateEmailConfirmationTokenAsync(user);
 
                 // Create confirmation link
-                var frontendUrl = _configuration["FrontendSettings:BaseUrl"] ?? "http://localhost:5173";
+                var baseUrl = _configuration["ApiSettings:BaseUrl"] ?? "https://localhost:7018";
                 var encodedToken = HttpUtility.UrlEncode(emailConfirmationToken);
                 var encodedEmail = HttpUtility.UrlEncode(user.Email);
-                var confirmationLink = $"{frontendUrl}/confirm-email?token={encodedToken}&email={encodedEmail}";
+                var confirmationLink = $"{baseUrl}/api/auth/confirm-email?token={encodedToken}&email={encodedEmail}";
 
                 // Send confirmation email
                 var emailSent = await _emailService.SendEmailConfirmationAsync(
@@ -249,6 +279,7 @@ namespace TableManagement.Application.Services
             }
             catch (Exception ex)
             {
+                _logger.LogError(ex, "Resend email confirmation error occurred");
                 return new AuthResponse { Success = false, Message = "Email gönderme sırasında bir hata oluştu." };
             }
         }
@@ -276,11 +307,6 @@ namespace TableManagement.Application.Services
             var tokenHandler = new JwtSecurityTokenHandler();
             var token = tokenHandler.CreateToken(tokenDescriptor);
             return tokenHandler.WriteToken(token);
-        
-        
         }
-
-
-
     }
 }

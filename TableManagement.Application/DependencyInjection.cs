@@ -2,6 +2,8 @@
 using System.Reflection;
 using TableManagement.Application.Services;
 using FluentValidation;
+using AutoMapper;
+using TableManagement.Application.Mappings;
 
 namespace TableManagement.Application
 {
@@ -9,8 +11,14 @@ namespace TableManagement.Application
     {
         public static IServiceCollection AddApplication(this IServiceCollection services)
         {
-            // AutoMapper
-            services.AddAutoMapper(Assembly.GetExecutingAssembly());
+            // AutoMapper - Explicit configuration to avoid ambiguity
+            var mapperConfig = new MapperConfiguration(cfg =>
+            {
+                cfg.AddProfile<AutoMapperProfile>();
+            });
+
+            var mapper = mapperConfig.CreateMapper();
+            services.AddSingleton<IMapper>(mapper);
 
             // FluentValidation
             services.AddValidatorsFromAssembly(Assembly.GetExecutingAssembly());

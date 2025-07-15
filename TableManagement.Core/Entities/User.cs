@@ -12,11 +12,11 @@ namespace TableManagement.Core.Entities
     {
         [Required]
         [MaxLength(50)]
-        public string FirstName { get; set; }
+        public string FirstName { get; set; } = string.Empty;
 
         [Required]
         [MaxLength(50)]
-        public string LastName { get; set; }
+        public string LastName { get; set; } = string.Empty;
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime? UpdatedAt { get; set; }
@@ -25,5 +25,7 @@ namespace TableManagement.Core.Entities
 
         // Navigation Properties
         public virtual ICollection<CustomTable> CustomTables { get; set; } = new List<CustomTable>();
+
+
     }
 }

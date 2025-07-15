@@ -6,6 +6,9 @@ using System.Threading.Tasks;
 
 namespace TableManagement.Core.Enums
 {
+
+
+
     public enum ColumnDataType
     {
         Varchar = 1,
@@ -13,5 +16,7 @@ namespace TableManagement.Core.Enums
         Decimal = 3,
         DateTime = 4
     }
+  
+
 
 }

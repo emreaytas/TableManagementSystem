@@ -69,6 +69,20 @@ namespace TableManagement.API.Controllers
             return Ok(table);
         }
 
+        [HttpGet("{id}/data")]
+        public async Task<IActionResult> GetTableData(int id)
+        {
+            var userId = GetCurrentUserId();
+            var data = await _tableService.GetTableDataAsync(id, userId);
+
+            if (data == null)
+            {
+                return NotFound(new { message = "Tablo bulunamadı." });
+            }
+
+            return Ok(data);
+        }
+
         [HttpDelete("{id}")]
         public async Task<IActionResult> DeleteTable(int id)
         {

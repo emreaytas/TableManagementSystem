@@ -1,20 +1,91 @@
-// TableManagement.API/Program.cs (EmailService eklenmesi)
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.IdentityModel.Tokens;
+using Microsoft.OpenApi.Models;
 using System.Text;
 using TableManagement.Core.Entities;
 using TableManagement.Infrastructure;
 using TableManagement.Infrastructure.Data;
 using TableManagement.Application;
 using TableManagement.Application.Services;
+using FluentValidation.AspNetCore;
+using FluentValidation;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Configure Logging
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
+builder.Logging.AddDebug();
+
 // Add services to the container.
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddFluentValidation(fv =>
+    {
+        fv.RegisterValidatorsFromAssemblyContaining<Program>();
+        fv.ImplicitlyValidateChildProperties = true;
+    });
+
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+
+// Swagger Configuration with JWT Support
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "Table Management API",
+        Version = "v1",
+        Description = "Tablo Yönetim Sistemi API Dokümantasyonu",
+        Contact = new OpenApiContact
+        {
+            Name = "Support Team",
+            Email = "support@tablemanagement.com"
+        }
+    });
+
+    // JWT Security Definition
+    options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        Description = "JWT Authorization header using the Bearer scheme. \r\n\r\n" +
+                      "Enter 'Bearer' [space] and then your token in the text input below.\r\n\r\n" +
+                      "Example: 'Bearer 12345abcdef'",
+        Name = "Authorization",
+        In = ParameterLocation.Header,
+        Type = SecuritySchemeType.ApiKey,
+        Scheme = "Bearer",
+        BearerFormat = "JWT"
+    });
+
+    // JWT Security Requirement
+    options.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                },
+                Scheme = "oauth2",
+                Name = "Bearer",
+                In = ParameterLocation.Header
+            },
+            new List<string>()
+        }
+    });
+
+    // Include XML comments if available
+    var xmlFile = $"{System.Reflection.Assembly.GetExecutingAssembly().GetName().Name}.xml";
+    var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+    if (File.Exists(xmlPath))
+    {
+        options.IncludeXmlComments(xmlPath);
+    }
+
+    // Custom schema IDs to avoid conflicts
+    options.CustomSchemaIds(type => type.FullName);
+});
 
 // Add Layer Dependencies
 builder.Services.AddInfrastructure(builder.Configuration);
@@ -78,7 +149,18 @@ var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
-    app.UseSwaggerUI();
+    app.UseSwaggerUI(options =>
+    {
+        options.SwaggerEndpoint("/swagger/v1/swagger.json", "Table Management API v1");
+        options.DocumentTitle = "Table Management API";
+        options.DefaultModelsExpandDepth(-1); // Modelleri varsayýlan olarak gizle
+        options.DefaultModelExpandDepth(2);
+        options.DisplayRequestDuration();
+        options.EnableTryItOutByDefault();
+
+        // Custom CSS for better appearance
+        options.InjectStylesheet("/swagger-ui/custom.css");
+    });
 }
 
 app.UseHttpsRedirection();

@@ -15,12 +15,13 @@ namespace TableManagement.Core.Entities
         [Required]
         public int ColumnId { get; set; }
 
-        public string Value { get; set; }
+        [MaxLength(1000)]
+        public string? Value { get; set; } // Nullable yapıldı
 
         public int RowIdentifier { get; set; } // Aynı satırdaki verileri gruplamak için
 
         // Navigation Properties
-        public virtual CustomTable CustomTable { get; set; }
-        public virtual CustomColumn Column { get; set; }
+        public virtual CustomTable CustomTable { get; set; } = null!;
+        public virtual CustomColumn Column { get; set; } = null!;
     }
 }

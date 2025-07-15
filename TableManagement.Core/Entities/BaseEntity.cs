@@ -11,5 +11,7 @@ namespace TableManagement.Core.Entities
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow; // ne zaman oluşturulduğu nesnenin bunu belirleriz.
         public DateTime? UpdatedAt { get; set; }
         public bool IsDeleted { get; set; } = false; // default olarak false, silinmiş nesne olarak işaretlenebilir. sonra true yapabiliriz.
+
+
     }
 }

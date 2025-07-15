@@ -8,6 +8,7 @@ using Serilog;
 using Serilog.Events;
 using System.Text;
 using TableManagement.API.Middleware;
+using TableManagement.Application;
 using TableManagement.Application.Services;
 using TableManagement.Core.Entities;
 using TableManagement.Core.Interfaces;
@@ -135,16 +136,14 @@ try
         };
     });
 
-    // AutoMapper
-    builder.Services.AddAutoMapper(typeof(Program));
+    // Application layer services (AutoMapper dahil)
+    builder.Services.AddApplication();
 
     // Repository pattern
     builder.Services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
     builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
-    // Services
-    builder.Services.AddScoped<IAuthService, AuthService>();
-    builder.Services.AddScoped<IEmailService, EmailService>();
+    // Additional services (Application layer'da tanýmlanmayanlar)
     builder.Services.AddScoped<ISecurityLogService, SecurityLogService>();
 
     // CORS

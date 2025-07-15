@@ -26,10 +26,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="Data\" />
     <Folder Include="Configurations\" />
-    <Folder Include="NewFolder\" />
-    <Folder Include="Repositories\" />
   </ItemGroup>
 
 </Project>

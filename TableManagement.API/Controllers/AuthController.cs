@@ -105,50 +105,49 @@ namespace TableManagement.API.Controllers
         /// Email doğrulama (GET - Email'den gelen link)
         /// </summary>
         [HttpGet("confirm-email")]
-        public async Task<IActionResult> ConfirmEmail([FromQuery] string token, [FromQuery] string email)
+        [ProducesResponseType(StatusCodes.Status302Found)]
+        public async Task<IActionResult> ConfirmEmailGet([FromQuery] string token, [FromQuery] string email)
         {
-            _logger.LogInformation($"Confirm email GET request received - Email: {email}");
-            _logger.LogInformation($"Token length: {token?.Length}");
-
-            if (string.IsNullOrEmpty(token) || string.IsNullOrEmpty(email))
-            {
-                _logger.LogWarning("Missing token or email in confirm email request");
-                return BadRequest(new
-                {
-                    success = false,
-                    message = "Geçersiz token veya email adresi"
-                });
-            }
-
             try
             {
-                // URL decode işlemi
-                var decodedToken = HttpUtility.UrlDecode(token);
-                var decodedEmail = HttpUtility.UrlDecode(email);
+                _logger.LogInformation($"Email confirmation attempt for email: {email}");
 
-                _logger.LogInformation($"Decoded email: {decodedEmail}");
+                if (string.IsNullOrEmpty(token) || string.IsNullOrEmpty(email))
+                {
+                    _logger.LogWarning("Token or email is missing");
 
-                var result = await _authService.ConfirmEmailAsync(decodedToken, decodedEmail);
+                    var errorUrl = HttpContext.RequestServices
+                        .GetService<IConfiguration>()?
+                        .GetValue<string>("FrontendSettings:BaseUrl") ?? "http://localhost:5173";
+
+                    return Redirect($"{errorUrl}/auth?error=invalid-confirmation-link");
+                }
+
+                // Email doğrulama işlemini gerçekleştir
+                var result = await _authService.ConfirmEmailAsync(token, email);
 
                 if (result.Success)
                 {
-                    // Frontend'e redirect yapabilirsiniz
+                    _logger.LogInformation($"Email confirmation successful for: {email}");
+
+                    // Başarılı doğrulama sonrası doğrudan giriş sayfasına yönlendir
                     var frontendUrl = HttpContext.RequestServices
                         .GetService<IConfiguration>()?
                         .GetValue<string>("FrontendSettings:BaseUrl") ?? "http://localhost:5173";
 
-                    var redirectUrl = $"{frontendUrl}/email-confirmed?success=true&message={HttpUtility.UrlEncode(result.Message)}";
+                    // Doğrudan auth sayfasına yönlendir
+                    var redirectUrl = $"{frontendUrl}/auth?verified=true";
                     _logger.LogInformation($"Redirecting to: {redirectUrl}");
 
                     return Redirect(redirectUrl);
                 }
 
-                // Hata durumunda da frontend'e yönlendir
-                var errorUrl = HttpContext.RequestServices
+                // Hata durumunda da giriş sayfasına yönlendir ama hata mesajıyla
+                var errorFrontendUrl = HttpContext.RequestServices
                     .GetService<IConfiguration>()?
                     .GetValue<string>("FrontendSettings:BaseUrl") ?? "http://localhost:5173";
 
-                var errorRedirectUrl = $"{errorUrl}/email-confirmed?success=false&message={HttpUtility.UrlEncode(result.Message)}";
+                var errorRedirectUrl = $"{errorFrontendUrl}/auth?verified=false";
                 _logger.LogWarning($"Email confirmation failed, redirecting to: {errorRedirectUrl}");
 
                 return Redirect(errorRedirectUrl);
@@ -161,7 +160,7 @@ namespace TableManagement.API.Controllers
                     .GetService<IConfiguration>()?
                     .GetValue<string>("FrontendSettings:BaseUrl") ?? "http://localhost:5173";
 
-                return Redirect($"{errorUrl}/email-confirmed?success=false&message={HttpUtility.UrlEncode("Bir hata oluştu")}");
+                return Redirect($"{errorUrl}/auth?verified=false");
             }
         }
 

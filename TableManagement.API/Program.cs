@@ -135,6 +135,7 @@ try
             }
         };
     });
+    builder.Services.AddScoped<IDataDefinitionService, DataDefinitionService>();
 
     // Application layer services (AutoMapper dahil)
     builder.Services.AddApplication();
@@ -213,11 +214,10 @@ try
         };
     });
 
-    // Custom middleware'ler (sýralama önemli!)
-    app.UseMiddleware<SecurityMiddleware>();        // Ýlk önce güvenlik kontrolü
-    app.UseMiddleware<RequestLoggingMiddleware>();  // Sonra detaylý loglama
+    app.UseMiddleware<SecurityMiddleware>();        
+    app.UseMiddleware<RequestLoggingMiddleware>();  
 
-    // Built-in HTTP logging (opsiyonel, development için)
+
     if (app.Environment.IsDevelopment())
     {
         app.UseHttpLogging();
@@ -230,7 +230,7 @@ try
 
     app.MapControllers();
 
-    // Startup log
+  
     Log.Information("TableManagement API started successfully");
 
     app.Run();
@@ -244,7 +244,6 @@ finally
     Log.CloseAndFlush();
 }
 
-// Helper method for IP address extraction
 static string GetClientIPAddress(HttpContext context)
 {
     var xForwardedFor = context.Request.Headers["X-Forwarded-For"].FirstOrDefault();
@@ -261,3 +260,4 @@ static string GetClientIPAddress(HttpContext context)
 
     return context.Connection.RemoteIpAddress?.ToString() ?? "Unknown";
 }
+

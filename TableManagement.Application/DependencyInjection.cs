@@ -4,6 +4,7 @@ using TableManagement.Application.Services;
 using FluentValidation;
 using AutoMapper;
 using TableManagement.Application.Mappings;
+using TableManagement.Core.Interfaces;
 
 namespace TableManagement.Application
 {
@@ -27,6 +28,8 @@ namespace TableManagement.Application
             services.AddScoped<IAuthService, AuthService>();
             services.AddScoped<ITableService, TableService>();
             services.AddScoped<IEmailService, EmailService>();
+            services.AddScoped<IDataDefinitionService, DataDefinitionService>();
+            services.AddScoped<ISecurityLogService, SecurityLogService>();
 
             return services;
         }

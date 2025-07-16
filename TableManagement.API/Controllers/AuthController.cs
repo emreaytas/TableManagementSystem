@@ -183,6 +183,7 @@ namespace TableManagement.API.Controllers
         /// <summary>
         /// Test endpoint - Email doğrulama durumunu kontrol et
         /// </summary>
+        
         [HttpGet("check-email-status/{email}")]
         public async Task<IActionResult> CheckEmailStatus(string email)
         {

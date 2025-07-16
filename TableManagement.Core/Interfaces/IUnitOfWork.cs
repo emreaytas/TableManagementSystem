@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using Microsoft.EntityFrameworkCore.Storage;
 
 namespace TableManagement.Core.Interfaces
 {
@@ -14,10 +10,8 @@ namespace TableManagement.Core.Interfaces
         IRepository<T> Repository<T>() where T : class;
 
         Task<int> SaveChangesAsync();
-        Task BeginTransactionAsync();
+        Task<IDbContextTransaction> BeginTransactionAsync();
         Task CommitTransactionAsync();
         Task RollbackTransactionAsync();
     }
-
-
 }

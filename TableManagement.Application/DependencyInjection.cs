@@ -21,7 +21,7 @@ namespace TableManagement.Application
             var mapper = mapperConfig.CreateMapper();
             services.AddSingleton<IMapper>(mapper);
 
-            // FluentValidation
+            // FluentValidation - Tüm validator'ları otomatik kaydet
             services.AddValidatorsFromAssembly(Assembly.GetExecutingAssembly());
 
             // Services

@@ -16,9 +16,10 @@ namespace TableManagement.API.Controllers
     {
         private readonly IAuthService _authService;
         private readonly ILogger<AuthController> _logger;
-
-        public AuthController(IAuthService authService, ILogger<AuthController> logger)
+        private readonly ILoggingService _loggingService;
+        public AuthController(IAuthService authService, ILogger<AuthController> logger,ILoggingService loggingService)
         {
+            _loggingService = loggingService;
             _authService = authService;
             _logger = logger;
         }
@@ -33,6 +34,13 @@ namespace TableManagement.API.Controllers
         {
             if (!ModelState.IsValid)
             {
+                await _loggingService.LogRequestAsync(
+                    HttpContext.Connection.RemoteIpAddress?.ToString() ?? "Unknown",
+                    HttpContext.Request.Path,
+                    HttpContext.Request.Method,
+                    request.ToString(),
+                    HttpContext.Request.QueryString.ToString());
+
                 return BadRequest(ModelState);
             }
 
@@ -57,6 +65,13 @@ namespace TableManagement.API.Controllers
         {
             if (!ModelState.IsValid)
             {
+                await _loggingService.LogRequestAsync(
+                    HttpContext.Connection.RemoteIpAddress?.ToString() ?? "Unknown",
+                    HttpContext.Request.Path,
+                    HttpContext.Request.Method,
+                    request.ToString(),
+                    HttpContext.Request.QueryString.ToString());
+
                 return BadRequest(ModelState);
             }
 
@@ -64,10 +79,23 @@ namespace TableManagement.API.Controllers
 
             if (result.Success)
             {
+                await _loggingService.LogRequestAsync(
+                    HttpContext.Connection.RemoteIpAddress?.ToString() ?? "Unknown",
+                    HttpContext.Request.Path,
+                    HttpContext.Request.Method,
+                    request.ToString(),
+                    HttpContext.Request.QueryString.ToString());
                 return Ok(result);
             }
 
+            await _loggingService.LogResponseAsync(
+                HttpContext.Request.Path,
+                HttpContext.Request.Method,
+                result.ToString(),
+                result.Success ? "200" : "401");
+
             return Unauthorized(result);
+        
         }
 
         /// <summary>

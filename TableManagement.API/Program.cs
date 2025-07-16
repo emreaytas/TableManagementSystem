@@ -69,6 +69,8 @@ try
         });
     });
 
+    builder.Services.AddScoped<ILoggingService, LoggingService>();
+
     // Database context
     builder.Services.AddDbContext<ApplicationDbContext>(options =>
         options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));

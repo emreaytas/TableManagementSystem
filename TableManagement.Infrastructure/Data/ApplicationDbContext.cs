@@ -20,7 +20,7 @@ namespace TableManagement.Infrastructure.Data
         public DbSet<CustomTable> CustomTables { get; set; }
         public DbSet<CustomColumn> CustomColumns { get; set; }
         public DbSet<CustomTableData> CustomTableData { get; set; }
-
+        public DbSet<LogEntry> LogEntries { get; set; }
         public DbSet<SecurityLog> SecurityLogs { get; set; }
 
         protected override void OnModelCreating(ModelBuilder builder)

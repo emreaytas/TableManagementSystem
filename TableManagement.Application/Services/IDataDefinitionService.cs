@@ -1,4 +1,5 @@
-﻿using TableManagement.Core.Entities;
+﻿using TableManagement.Application.DTOs.Responses;
+using TableManagement.Core.Entities;
 using TableManagement.Core.Enums;
 
 namespace TableManagement.Application.Services
@@ -44,5 +45,30 @@ namespace TableManagement.Application.Services
         /// Veri tipini SQL karşılığına çevirir
         /// </summary>
         string ConvertToSqlDataType(ColumnDataType dataType);
+
+        /// <summary>
+        /// Kolon veri tipini değiştirir
+        /// </summary>
+        Task<ColumnUpdateResult> UpdateColumnDataTypeAsync(string tableName, string columnName, ColumnDataType newDataType, bool forceUpdate, int userId);
+
+        /// <summary>
+        /// Kolon güncelleme işleminden önce veri uyumluluğunu kontrol eder
+        /// </summary>
+        Task<ColumnValidationResult> ValidateColumnUpdateAsync(string tableName, string columnName, ColumnDataType newDataType, int userId);
+
+        /// <summary>
+        /// Kolonu yeniden adlandırır
+        /// </summary>
+        Task<bool> RenameColumnAsync(string tableName, string oldColumnName, string newColumnName, int userId);
+
+        /// <summary>
+        /// Kolon varsayılan değerini günceller
+        /// </summary>
+        Task<bool> UpdateColumnDefaultValueAsync(string tableName, string columnName, string defaultValue, int userId);
+
+        /// <summary>
+        /// Kolon NULL/NOT NULL durumunu günceller
+        /// </summary>
+        Task<bool> UpdateColumnNullabilityAsync(string tableName, string columnName, bool isRequired, int userId);
     }
 }

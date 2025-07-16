@@ -22,8 +22,4 @@
 		<ProjectReference Include="..\TableManagement.Infrastructure\TableManagement.Infrastructure.csproj" />
 	</ItemGroup>
 
-	<ItemGroup>
-		<Folder Include="Validators\" />
-	</ItemGroup>
-
 </Project>

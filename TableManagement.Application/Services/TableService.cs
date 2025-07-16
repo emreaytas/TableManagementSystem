@@ -22,18 +22,18 @@ namespace TableManagement.Application.Services
 
         public async Task<TableResponse> CreateTableAsync(CreateTableRequest request, int userId)
         {
-            await _unitOfWork.BeginTransactionAsync(); // Corrected: Removed 'using var transaction' as BeginTransactionAsync returns void.  
+            using var transaction = await _unitOfWork.BeginTransactionAsync();
 
             try
             {
-                // Check if table name exists for user  
+                // Check if table name exists for user
                 var exists = await _unitOfWork.CustomTables.TableNameExistsForUserAsync(request.TableName, userId);
                 if (exists)
                 {
                     throw new ArgumentException("Bu tablo adı zaten kullanılıyor.");
                 }
 
-                // Create metadata table  
+                // Create metadata table
                 var table = new CustomTable
                 {
                     TableName = request.TableName,
@@ -44,7 +44,7 @@ namespace TableManagement.Application.Services
                 await _unitOfWork.CustomTables.AddAsync(table);
                 await _unitOfWork.SaveChangesAsync();
 
-                // Create columns metadata  
+                // Create columns metadata
                 var columns = new List<CustomColumn>();
                 foreach (var columnRequest in request.Columns)
                 {
@@ -64,7 +64,7 @@ namespace TableManagement.Application.Services
 
                 await _unitOfWork.SaveChangesAsync();
 
-                // Create actual database table using DDL  
+                // Create actual database table using DDL
                 var ddlResult = await _dataDefinitionService.CreateUserTableAsync(table.TableName, columns, userId);
                 if (!ddlResult)
                 {
@@ -275,6 +275,171 @@ namespace TableManagement.Application.Services
                 Core.Enums.ColumnDataType.Varchar => value,
                 _ => value
             };
+        }
+
+        public async Task<ColumnUpdateResult> UpdateColumnAsync(int tableId, UpdateColumnRequest request, int userId)
+        {
+            try
+            {
+                var table = await _unitOfWork.CustomTables.GetTableWithColumnsAsync(tableId);
+                if (table == null || table.UserId != userId)
+                {
+                    return new ColumnUpdateResult
+                    {
+                        Success = false,
+                        Message = "Tablo bulunamadı veya erişim yetkiniz yok"
+                    };
+                }
+
+                var column = table.Columns.FirstOrDefault(c => c.Id == request.ColumnId);
+                if (column == null)
+                {
+                    return new ColumnUpdateResult
+                    {
+                        Success = false,
+                        Message = "Kolon bulunamadı"
+                    };
+                }
+
+                var result = new ColumnUpdateResult();
+
+                // Veri tipi değişikliği var mı kontrol et
+                if (column.DataType != request.DataType)
+                {
+                    var ddlResult = await _dataDefinitionService.UpdateColumnDataTypeAsync(
+                        table.TableName, column.ColumnName, request.DataType, request.ForceUpdate, userId);
+
+                    if (!ddlResult.Success)
+                    {
+                        return ddlResult;
+                    }
+
+                    result.ValidationResult = ddlResult.ValidationResult;
+                    result.ExecutedQueries.AddRange(ddlResult.ExecutedQueries);
+                }
+
+                // Kolon adı değişikliği var mı kontrol et
+                if (column.ColumnName != request.ColumnName)
+                {
+                    var renameResult = await _dataDefinitionService.RenameColumnAsync(
+                        table.TableName, column.ColumnName, request.ColumnName, userId);
+
+                    if (!renameResult)
+                    {
+                        return new ColumnUpdateResult
+                        {
+                            Success = false,
+                            Message = "Kolon adı güncellenemedi"
+                        };
+                    }
+
+                    result.ExecutedQueries.Add($"sp_rename '{table.TableName}.{column.ColumnName}', '{request.ColumnName}', 'COLUMN'");
+                }
+
+                // NULL/NOT NULL durumu değişikliği var mı kontrol et
+                if (column.IsRequired != request.IsRequired)
+                {
+                    var nullabilityResult = await _dataDefinitionService.UpdateColumnNullabilityAsync(
+                        table.TableName, request.ColumnName, request.IsRequired, userId);
+
+                    if (!nullabilityResult)
+                    {
+                        return new ColumnUpdateResult
+                        {
+                            Success = false,
+                            Message = "Kolon zorunluluk durumu güncellenemedi"
+                        };
+                    }
+
+                    result.ExecutedQueries.Add($"ALTER TABLE {table.TableName} ALTER COLUMN {request.ColumnName} ... {(request.IsRequired ? "NOT NULL" : "NULL")}");
+                }
+
+                // Default value değişikliği var mı kontrol et
+                if (column.DefaultValue != request.DefaultValue)
+                {
+                    var defaultResult = await _dataDefinitionService.UpdateColumnDefaultValueAsync(
+                        table.TableName, request.ColumnName, request.DefaultValue ?? "", userId);
+
+                    if (!defaultResult)
+                    {
+                        return new ColumnUpdateResult
+                        {
+                            Success = false,
+                            Message = "Kolon varsayılan değeri güncellenemedi"
+                        };
+                    }
+
+                    result.ExecutedQueries.Add($"ALTER TABLE {table.TableName} ADD/DROP DEFAULT CONSTRAINT");
+                }
+
+                // Metadata'yı güncelle
+                column.ColumnName = request.ColumnName;
+                column.DataType = request.DataType;
+                column.IsRequired = request.IsRequired;
+                column.DisplayOrder = request.DisplayOrder;
+                column.DefaultValue = request.DefaultValue;
+                column.UpdatedAt = DateTime.UtcNow;
+
+                await _unitOfWork.Repository<CustomColumn>().UpdateAsync(column);
+                await _unitOfWork.SaveChangesAsync();
+
+                result.Success = true;
+                result.Message = "Kolon başarıyla güncellendi";
+
+                return result;
+            }
+            catch (Exception ex)
+            {
+                return new ColumnUpdateResult
+                {
+                    Success = false,
+                    Message = "Kolon güncellenirken hata oluştu: " + ex.Message
+                };
+            }
+        }
+
+        public async Task<ColumnValidationResult> ValidateColumnUpdateAsync(int tableId, UpdateColumnRequest request, int userId)
+        {
+            try
+            {
+                var table = await _unitOfWork.CustomTables.GetTableWithColumnsAsync(tableId);
+                if (table == null || table.UserId != userId)
+                {
+                    return new ColumnValidationResult
+                    {
+                        IsValid = false,
+                        Issues = new List<string> { "Tablo bulunamadı veya erişim yetkiniz yok" }
+                    };
+                }
+
+                var column = table.Columns.FirstOrDefault(c => c.Id == request.ColumnId);
+                if (column == null)
+                {
+                    return new ColumnValidationResult
+                    {
+                        IsValid = false,
+                        Issues = new List<string> { "Kolon bulunamadı" }
+                    };
+                }
+
+                // Veri tipi değişikliği kontrolü
+                if (column.DataType != request.DataType)
+                {
+                    return await _dataDefinitionService.ValidateColumnUpdateAsync(
+                        table.TableName, column.ColumnName, request.DataType, userId);
+                }
+
+                // Diğer değişiklikler için basit validasyon
+                return new ColumnValidationResult { IsValid = true };
+            }
+            catch (Exception)
+            {
+                return new ColumnValidationResult
+                {
+                    IsValid = false,
+                    Issues = new List<string> { "Validasyon sırasında hata oluştu" }
+                };
+            }
         }
     }
 }

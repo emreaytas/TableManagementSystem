@@ -1,7 +1,8 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Mvc;
+using System.Web;
 using TableManagement.Application.DTOs.Requests;
 using TableManagement.Application.Services;
-using System.Web;
 using TableManagement.Core.DTOs.Requests;
 
 namespace TableManagement.API.Controllers
@@ -17,11 +18,13 @@ namespace TableManagement.API.Controllers
         private readonly IAuthService _authService;
         private readonly ILogger<AuthController> _logger;
         private readonly ILoggingService _loggingService;
-        public AuthController(IAuthService authService, ILogger<AuthController> logger,ILoggingService loggingService)
+        private readonly UserManager<TableManagement.Core.Entities.User> _userManager;
+        public AuthController(IAuthService authService, ILogger<AuthController> logger,ILoggingService loggingService, UserManager<TableManagement.Core.Entities.User> userManager)
         {
             _loggingService = loggingService;
             _authService = authService;
             _logger = logger;
+            _userManager = userManager;
         }
 
         /// <summary>
@@ -209,9 +212,39 @@ namespace TableManagement.API.Controllers
         }
 
         /// <summary>
+        /// Bir kullanıcı adının sistemde kayıtlı olup olmadığını kontrol eder.
+        /// </summary>
+        /// <param name="username">Kontrol edilecek kullanıcı adı.</param>
+        /// <returns>Kullanıcı adının alınıp alınmadığını belirten bir boolean.</returns>
+        [HttpGet("check-username/{username}")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        public async Task<IActionResult> CheckUsernameExists(string username)
+        {
+            var user = await _userManager.FindByNameAsync(username);
+            // user null değilse, kullanıcı adı alınmış (taken) demektir.
+            return Ok(new { isTaken = user != null });
+        }
+
+        /// <summary>
+        /// Bir e-posta adresinin sistemde kayıtlı olup olmadığını kontrol eder.
+        /// </summary>
+        /// <param name="email">Kontrol edilecek e-posta adresi.</param>
+        /// <returns>E-postanın alınıp alınmadığını belirten bir boolean.</returns>
+        [HttpGet("check-email/{email}")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        public async Task<IActionResult> CheckEmailExists(string email)
+        {
+            var user = await _userManager.FindByEmailAsync(email);
+            // user null değilse, e-posta alınmış (taken) demektir.
+            return Ok(new { isTaken = user != null });
+        }
+
+
+
+        /// <summary>
         /// Test endpoint - Email doğrulama durumunu kontrol et
         /// </summary>
-        
+
         [HttpGet("check-email-status/{email}")]
         public async Task<IActionResult> CheckEmailStatus(string email)
         {

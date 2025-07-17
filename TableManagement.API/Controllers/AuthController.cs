@@ -19,11 +19,17 @@ namespace TableManagement.API.Controllers
         private readonly ILogger<AuthController> _logger;
         private readonly ILoggingService _loggingService;
         private readonly UserManager<TableManagement.Core.Entities.User> _userManager;
-        public AuthController(IAuthService authService, ILogger<AuthController> logger,ILoggingService loggingService, UserManager<TableManagement.Core.Entities.User> userManager)
+        private readonly IConfiguration _configuration;
+        public AuthController(
+            IAuthService authService,
+            ILogger<AuthController> logger,
+            ILoggingService loggingService,
+            UserManager<TableManagement.Core.Entities.User> userManager,IConfiguration configuration)
         {
             _loggingService = loggingService;
             _authService = authService;
             _logger = logger;
+            _configuration = configuration;
             _userManager = userManager;
         }
 
@@ -35,26 +41,69 @@ namespace TableManagement.API.Controllers
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         public async Task<IActionResult> Register([FromBody] RegisterRequest request)
         {
-            if (!ModelState.IsValid)
+            try
             {
-                await _loggingService.LogRequestAsync(
-                    HttpContext.Connection.RemoteIpAddress?.ToString() ?? "Unknown",
-                    HttpContext.Request.Path,
-                    HttpContext.Request.Method,
-                    request.ToString(),
-                    HttpContext.Request.QueryString.ToString());
+                _logger.LogInformation($"Register attempt for username: {request?.UserName}, email: {request?.Email}");
 
-                return BadRequest(ModelState);
+                // Input validation
+                if (request == null)
+                {
+                    _logger.LogWarning("Register request is null");
+                    return BadRequest(new { success = false, message = "Geçersiz kayıt verisi." });
+                }
+
+                // Log the incoming request for debugging
+                _logger.LogInformation($"Register request data: FirstName='{request.FirstName}', LastName='{request.LastName}', Email='{request.Email}', UserName='{request.UserName}', PasswordLength={request.Password?.Length ?? 0}, ConfirmPasswordLength={request.ConfirmPassword?.Length ?? 0}");
+
+                if (!ModelState.IsValid)
+                {
+                    _logger.LogWarning("Register ModelState is invalid");
+
+                    // Log specific validation errors
+                    foreach (var error in ModelState)
+                    {
+                        foreach (var subError in error.Value.Errors)
+                        {
+                            _logger.LogWarning($"Validation error for {error.Key}: {subError.ErrorMessage}");
+                        }
+                    }
+
+                    var errors = ModelState
+                        .Where(x => x.Value.Errors.Count > 0)
+                        .ToDictionary(
+                            kvp => kvp.Key,
+                            kvp => kvp.Value.Errors.Select(e => e.ErrorMessage).ToArray()
+                        );
+
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = "Form verilerinde hata bulundu.",
+                        errors = errors
+                    });
+                }
+
+                var result = await _authService.RegisterAsync(request);
+
+                _logger.LogInformation($"Register result for {request.UserName}: Success={result.Success}, Message={result.Message}");
+
+                if (result.Success)
+                {
+                    return Ok(result);
+                }
+
+                return BadRequest(result);
             }
-
-            var result = await _authService.RegisterAsync(request);
-
-            if (result.Success)
+            catch (Exception ex)
             {
-                return Ok(result);
-            }
+                _logger.LogError(ex, $"Unexpected error in Register controller for user: {request?.UserName}");
 
-            return BadRequest(result);
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = "Sunucu hatası. Lütfen daha sonra tekrar deneyin."
+                });
+            }
         }
 
         /// <summary>
@@ -66,110 +115,189 @@ namespace TableManagement.API.Controllers
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
         public async Task<IActionResult> Login([FromBody] LoginRequest request)
         {
-            if (!ModelState.IsValid)
+            try
             {
-                await _loggingService.LogRequestAsync(
-                    HttpContext.Connection.RemoteIpAddress?.ToString() ?? "Unknown",
+                _logger.LogInformation($"Login attempt for username: {request?.UserName}");
+
+                // Input validation
+                if (request == null)
+                {
+                    _logger.LogWarning("Login request is null");
+                    return BadRequest(new { success = false, message = "Geçersiz giriş verisi." });
+                }
+
+                // Log the incoming request for debugging
+                _logger.LogInformation($"Login request data: UserName='{request.UserName}', PasswordLength={request.Password?.Length ?? 0}");
+
+                if (!ModelState.IsValid)
+                {
+                    _logger.LogWarning("Login ModelState is invalid");
+
+                    // Log specific validation errors
+                    foreach (var error in ModelState)
+                    {
+                        foreach (var subError in error.Value.Errors)
+                        {
+                            _logger.LogWarning($"Validation error for {error.Key}: {subError.ErrorMessage}");
+                        }
+                    }
+
+                    var errors = ModelState
+                        .Where(x => x.Value.Errors.Count > 0)
+                        .ToDictionary(
+                            kvp => kvp.Key,
+                            kvp => kvp.Value.Errors.Select(e => e.ErrorMessage).ToArray()
+                        );
+
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = "Giriş verilerinde hata bulundu.",
+                        errors = errors
+                    });
+                }
+
+                var result = await _authService.LoginAsync(request);
+
+                _logger.LogInformation($"Login result for {request.UserName}: Success={result.Success}, Message={result.Message}");
+
+                if (result.Success)
+                {
+                    await _loggingService.LogRequestAsync(
+                        HttpContext.Connection.RemoteIpAddress?.ToString() ?? "Unknown",
+                        HttpContext.Request.Path,
+                        HttpContext.Request.Method,
+                        $"User: {request.UserName}",
+                        HttpContext.Request.QueryString.ToString());
+
+                    return Ok(result);
+                }
+
+                await _loggingService.LogResponseAsync(
                     HttpContext.Request.Path,
                     HttpContext.Request.Method,
-                    request.ToString(),
-                    HttpContext.Request.QueryString.ToString());
+                    result.Message,
+                    "401");
 
-                return BadRequest(ModelState);
+                return Unauthorized(result);
             }
-
-            var result = await _authService.LoginAsync(request);
-
-            if (result.Success)
+            catch (Exception ex)
             {
-                await _loggingService.LogRequestAsync(
-                    HttpContext.Connection.RemoteIpAddress?.ToString() ?? "Unknown",
-                    HttpContext.Request.Path,
-                    HttpContext.Request.Method,
-                    request.ToString(),
-                    HttpContext.Request.QueryString.ToString());
-                return Ok(result);
+                _logger.LogError(ex, $"Unexpected error in Login controller for user: {request?.UserName}");
+
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = "Sunucu hatası. Lütfen daha sonra tekrar deneyin."
+                });
             }
-
-            await _loggingService.LogResponseAsync(
-                HttpContext.Request.Path,
-                HttpContext.Request.Method,
-                result.ToString(),
-                result.Success ? "200" : "401");
-
-            return Unauthorized(result);
-        
         }
 
         /// <summary>
-        /// Email doğrulama (GET - Email'den gelen link)
+        /// Bir kullanıcı adının sistemde kayıtlı olup olmadığını kontrol eder
         /// </summary>
+        [HttpGet("check-username/{username}")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        public async Task<IActionResult> CheckUsername(string username)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(username))
+                {
+                    return Ok(new { isTaken = false, message = "Kullanıcı adı boş olamaz." });
+                }
+
+                var user = await _userManager.FindByNameAsync(username.Trim());
+                var isTaken = user != null;
+
+                return Ok(new { isTaken = isTaken });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Error checking username: {username}");
+                return Ok(new { isTaken = false, message = "Kontrol sırasında bir hata oluştu." });
+            }
+        }
+
+        /// <summary>
+        /// Bir email adresinin sistemde kayıtlı olup olmadığını kontrol eder
+        /// </summary>
+        [HttpGet("check-email/{email}")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        public async Task<IActionResult> CheckEmail(string email)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(email))
+                {
+                    return Ok(new { isTaken = false, message = "Email adresi boş olamaz." });
+                }
+
+                var user = await _userManager.FindByEmailAsync(email.Trim());
+                var isTaken = user != null;
+
+                return Ok(new { isTaken = isTaken });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Error checking email: {email}");
+                return Ok(new { isTaken = false, message = "Kontrol sırasında bir hata oluştu." });
+            }
+        }
+
         [HttpGet("confirm-email")]
         [ProducesResponseType(StatusCodes.Status302Found)]
         public async Task<IActionResult> ConfirmEmailGet([FromQuery] string token, [FromQuery] string email)
         {
             try
             {
-                _logger.LogInformation($"Email confirmation attempt for email: {email}");
+                _logger.LogInformation($"=== EMAIL CONFIRMATION START ===");
+                _logger.LogInformation($"Raw token: {token}");
+                _logger.LogInformation($"Raw email: {email}");
+
+                // URL decode işlemleri
+                var decodedToken = Uri.UnescapeDataString(token ?? "");
+                var decodedEmail = Uri.UnescapeDataString(email ?? "");
+
+                _logger.LogInformation($"Decoded token: {decodedToken}");
+                _logger.LogInformation($"Decoded email: {decodedEmail}");
 
                 if (string.IsNullOrEmpty(token) || string.IsNullOrEmpty(email))
                 {
                     _logger.LogWarning("Token or email is missing");
-
-                    var errorUrl = HttpContext.RequestServices
-                        .GetService<IConfiguration>()?
-                        .GetValue<string>("FrontendSettings:BaseUrl") ?? "http://localhost:5173";
-
+                    var errorUrl = _configuration["FrontendSettings:BaseUrl"] ?? "http://localhost:5173";
                     return Redirect($"{errorUrl}/auth?error=invalid-confirmation-link");
                 }
 
                 // Email doğrulama işlemini gerçekleştir
-                var result = await _authService.ConfirmEmailAsync(token, email);
+                var result = await _authService.ConfirmEmailAsync(decodedToken, decodedEmail);
+
+                _logger.LogInformation($"Email confirmation result: Success={result.Success}, Message={result.Message}");
 
                 if (result.Success)
                 {
-                    _logger.LogInformation($"Email confirmation successful for: {email}");
-
-                    // Başarılı doğrulama sonrası doğrudan giriş sayfasına yönlendir
-                    var frontendUrl = HttpContext.RequestServices
-                        .GetService<IConfiguration>()?
-                        .GetValue<string>("FrontendSettings:BaseUrl") ?? "http://localhost:5173";
-
-                    // Doğrudan auth sayfasına yönlendir
+                    _logger.LogInformation($"Email confirmation successful for: {decodedEmail}");
+                    var frontendUrl = _configuration["FrontendSettings:BaseUrl"] ?? "http://localhost:5173";
                     var redirectUrl = $"{frontendUrl}/auth?verified=true";
                     _logger.LogInformation($"Redirecting to: {redirectUrl}");
-
                     return Redirect(redirectUrl);
                 }
 
-                // Hata durumunda da giriş sayfasına yönlendir ama hata mesajıyla
-                var errorFrontendUrl = HttpContext.RequestServices
-                    .GetService<IConfiguration>()?
-                    .GetValue<string>("FrontendSettings:BaseUrl") ?? "http://localhost:5173";
-
-                var errorRedirectUrl = $"{errorFrontendUrl}/auth?verified=false";
+                // Hata durumunda
+                var errorFrontendUrl = _configuration["FrontendSettings:BaseUrl"] ?? "http://localhost:5173";
+                var errorRedirectUrl = $"{errorFrontendUrl}/auth?verified=false&error={Uri.EscapeDataString(result.Message)}";
                 _logger.LogWarning($"Email confirmation failed, redirecting to: {errorRedirectUrl}");
-
                 return Redirect(errorRedirectUrl);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error during email confirmation");
-
-                var errorUrl = HttpContext.RequestServices
-                    .GetService<IConfiguration>()?
-                    .GetValue<string>("FrontendSettings:BaseUrl") ?? "http://localhost:5173";
-
-                return Redirect($"{errorUrl}/auth?verified=false");
+                var errorUrl = _configuration["FrontendSettings:BaseUrl"] ?? "http://localhost:5173";
+                return Redirect($"{errorUrl}/auth?verified=false&error=system-error");
             }
         }
 
-        /// <summary>
-        /// Email doğrulama (POST - API çağrısı)
-        /// </summary>
         [HttpPost("confirm-email")]
-        [ProducesResponseType(StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)]
         public async Task<IActionResult> ConfirmEmailPost([FromBody] ConfirmEmailRequest request)
         {
             if (!ModelState.IsValid)
@@ -187,12 +315,7 @@ namespace TableManagement.API.Controllers
             return BadRequest(result);
         }
 
-        /// <summary>
-        /// Email doğrulama tekrar gönderme
-        /// </summary>
         [HttpPost("resend-email-confirmation")]
-        [ProducesResponseType(StatusCodes.Status200OK)]
-        [ProducesResponseType(StatusCodes.Status400BadRequest)]
         public async Task<IActionResult> ResendEmailConfirmation([FromBody] ResendEmailRequest request)
         {
             if (!ModelState.IsValid)
@@ -208,69 +331,6 @@ namespace TableManagement.API.Controllers
             }
 
             return BadRequest(result);
-        }
-
-        /// <summary>
-        /// Bir kullanıcı adının sistemde kayıtlı olup olmadığını kontrol eder.
-        /// </summary>
-        /// <param name="username">Kontrol edilecek kullanıcı adı.</param>
-        /// <returns>Kullanıcı adının alınıp alınmadığını belirten bir boolean.</returns>
-        [HttpGet("check-username/{username}")]
-        [ProducesResponseType(StatusCodes.Status200OK)]
-        public async Task<IActionResult> CheckUsernameExists(string username)
-        {
-            var user = await _userManager.FindByNameAsync(username);
-            // user null değilse, kullanıcı adı alınmış (taken) demektir.
-            return Ok(new { isTaken = user != null });
-        }
-
-        /// <summary>
-        /// Bir e-posta adresinin sistemde kayıtlı olup olmadığını kontrol eder.
-        /// </summary>
-        /// <param name="email">Kontrol edilecek e-posta adresi.</param>
-        /// <returns>E-postanın alınıp alınmadığını belirten bir boolean.</returns>
-        [HttpGet("check-email/{email}")]
-        [ProducesResponseType(StatusCodes.Status200OK)]
-        public async Task<IActionResult> CheckEmailExists(string email)
-        {
-            var user = await _userManager.FindByEmailAsync(email);
-            // user null değilse, e-posta alınmış (taken) demektir.
-            return Ok(new { isTaken = user != null });
-        }
-
-
-
-        /// <summary>
-        /// Test endpoint - Email doğrulama durumunu kontrol et
-        /// </summary>
-
-        [HttpGet("check-email-status/{email}")]
-        public async Task<IActionResult> CheckEmailStatus(string email)
-        {
-            try
-            {
-                // Bu endpoint sadece development için - production'da kaldırılmalı
-                var userManager = HttpContext.RequestServices.GetRequiredService<Microsoft.AspNetCore.Identity.UserManager<TableManagement.Core.Entities.User>>();
-                var user = await userManager.FindByEmailAsync(email);
-
-                if (user == null)
-                {
-                    return NotFound(new { message = "Kullanıcı bulunamadı" });
-                }
-
-                return Ok(new
-                {
-                    email = user.Email,
-                    emailConfirmed = user.EmailConfirmed,
-                    isEmailConfirmed = user.IsEmailConfirmed,
-                    userName = user.UserName
-                });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error checking email status");
-                return StatusCode(500, new { message = "Bir hata oluştu" });
-            }
         }
     }
 }

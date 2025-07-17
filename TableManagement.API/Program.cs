@@ -12,9 +12,9 @@ using TableManagement.Application;
 using TableManagement.Application.Services;
 using TableManagement.Core.Entities;
 using TableManagement.Core.Interfaces;
+using TableManagement.Infrastructure;
 using TableManagement.Infrastructure.Data;
 using TableManagement.Infrastructure.Repositories;
-
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -69,8 +69,6 @@ try
         });
     });
 
-    builder.Services.AddScoped<ILoggingService, LoggingService>();
-
     // Database context
     builder.Services.AddDbContext<ApplicationDbContext>(options =>
         options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
@@ -78,83 +76,127 @@ try
     // Identity (int key kullanýmý için düzeltildi)
     builder.Services.AddIdentity<User, IdentityRole<int>>(options =>
     {
-        options.Password.RequireDigit = true;
+        // Password requirements - Çok katý olmayan ayarlar
+        options.Password.RequireDigit = false;
         options.Password.RequiredLength = 6;
         options.Password.RequireNonAlphanumeric = false;
-        options.Password.RequireUppercase = true;
-        options.Password.RequireLowercase = true;
+        options.Password.RequireUppercase = false;
+        options.Password.RequireLowercase = false;
 
+        // User settings
         options.User.RequireUniqueEmail = true;
-        options.SignIn.RequireConfirmedEmail = true;
+        options.User.AllowedUserNameCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._@+";
 
-        options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(30);
+        // Email confirmation settings
+        options.SignIn.RequireConfirmedEmail = true;
+        options.SignIn.RequireConfirmedAccount = false;
+
+        // Lockout settings
+        options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
         options.Lockout.MaxFailedAccessAttempts = 5;
+        options.Lockout.AllowedForNewUsers = true;
     })
     .AddEntityFrameworkStores<ApplicationDbContext>()
     .AddDefaultTokenProviders();
 
-    // JWT Authentication
+    // JWT Authentication - DÜZELTÝLDÝ
     var jwtSettings = builder.Configuration.GetSection("JwtSettings");
     var secretKey = jwtSettings["SecretKey"];
+    var issuer = jwtSettings["Issuer"] ?? "TableManagementAPI";
+    var audience = jwtSettings["Audience"] ?? "TableManagementClients";
+
+    if (string.IsNullOrEmpty(secretKey))
+    {
+        throw new InvalidOperationException("JWT SecretKey is not configured in appsettings.json!");
+    }
+
+    Log.Information("Configuring JWT with Issuer: {Issuer}, Audience: {Audience}", issuer, audience);
+
+    var key = Encoding.ASCII.GetBytes(secretKey); // UTF8 yerine ASCII kullan
 
     builder.Services.AddAuthentication(options =>
     {
         options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
         options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+        options.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;
     })
     .AddJwtBearer(options =>
     {
+        options.RequireHttpsMetadata = false; // Development için
+        options.SaveToken = true;
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey)),
-            ValidateIssuer = false,
-            ValidateAudience = false,
+            IssuerSigningKey = new SymmetricSecurityKey(key),
+            ValidateIssuer = true,
+            ValidIssuer = issuer,
+            ValidateAudience = true,
+            ValidAudience = audience,
             ValidateLifetime = true,
-            ClockSkew = TimeSpan.Zero
+            ClockSkew = TimeSpan.Zero,
+            RequireExpirationTime = true
         };
 
-        // JWT events için loglama
+        // JWT events için detaylý loglama
         options.Events = new JwtBearerEvents
         {
             OnAuthenticationFailed = context =>
             {
-                Log.Warning("JWT Authentication failed: {Error}", context.Exception.Message);
+                Log.Error("JWT Authentication failed: {Error} for path {Path}",
+                    context.Exception.Message, context.Request.Path);
                 return Task.CompletedTask;
             },
             OnChallenge = context =>
             {
-                Log.Warning("JWT Challenge for {Path} from {IP}",
+                Log.Warning("JWT Challenge for {Path} from {IP}. Error: {Error}, Description: {ErrorDescription}",
                     context.Request.Path,
-                    context.Request.HttpContext.Connection.RemoteIpAddress);
+                    GetClientIPAddress(context.HttpContext),
+                    context.Error,
+                    context.ErrorDescription);
                 return Task.CompletedTask;
             },
             OnTokenValidated = context =>
             {
-                Log.Information("JWT Token validated for user {User}",
-                    context.Principal?.Identity?.Name ?? "Unknown");
+                Log.Information("JWT Token validated for user {User} on path {Path}",
+                    context.Principal?.Identity?.Name ?? "Unknown",
+                    context.Request.Path);
+                return Task.CompletedTask;
+            },
+            OnMessageReceived = context =>
+            {
+                var token = context.Request.Headers["Authorization"].FirstOrDefault()?.Split(" ").Last();
+                if (!string.IsNullOrEmpty(token))
+                {
+                    Log.Debug("JWT Token received for path {Path}: {TokenStart}...",
+                        context.Request.Path,
+                        token.Length > 20 ? token.Substring(0, 20) : token);
+                }
                 return Task.CompletedTask;
             }
         };
     });
-    builder.Services.AddScoped<IDataDefinitionService, DataDefinitionService>();
 
-    // Application layer services (AutoMapper dahil)
+    // Authorization
+    builder.Services.AddAuthorization();
+
+    // Application layer services (AutoMapper dahil) - DÜZELTÝLDÝ
     builder.Services.AddApplication();
 
-    // Repository pattern
-    builder.Services.AddScoped(typeof(IRepository<>), typeof(Repository<>));
-    builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
+    // Infrastructure layer services - DÜZELTÝLDÝ
+    builder.Services.AddInfrastructure(builder.Configuration);
 
-    // Additional services (Application layer'da tanýmlanmayanlar)
+    // Additional services
+    builder.Services.AddScoped<ILoggingService, LoggingService>();
+    builder.Services.AddScoped<IDataDefinitionService, DataDefinitionService>();
     builder.Services.AddScoped<ISecurityLogService, SecurityLogService>();
 
-    // CORS
+    // CORS - Frontend URL'ini dinamik olarak al
+    var frontendUrl = builder.Configuration["FrontendSettings:BaseUrl"] ?? "http://localhost:5173";
     builder.Services.AddCors(options =>
     {
         options.AddPolicy("AllowSpecificOrigin", policy =>
         {
-            policy.WithOrigins(builder.Configuration["FrontendSettings:BaseUrl"])
+            policy.WithOrigins(frontendUrl, "https://localhost:5173", "http://localhost:5173")
                   .AllowAnyHeader()
                   .AllowAnyMethod()
                   .AllowCredentials();
@@ -179,7 +221,11 @@ try
     if (app.Environment.IsDevelopment())
     {
         app.UseSwagger();
-        app.UseSwaggerUI();
+        app.UseSwaggerUI(c =>
+        {
+            c.SwaggerEndpoint("/swagger/v1/swagger.json", "Table Management API V1");
+            // RoutePrefix = string.Empty kaldýrýldý - standart /swagger route kullan
+        });
         app.UseDeveloperExceptionPage();
     }
     else
@@ -216,24 +262,49 @@ try
         };
     });
 
-    app.UseMiddleware<SecurityMiddleware>();        
-    app.UseMiddleware<RequestLoggingMiddleware>();  
-
+    // Middleware'larý doðru sýrayla ekle
+    app.UseMiddleware<SecurityMiddleware>();
+    app.UseMiddleware<RequestLoggingMiddleware>();
 
     if (app.Environment.IsDevelopment())
     {
         app.UseHttpLogging();
     }
 
+    // CORS middleware should be before authentication
     app.UseCors("AllowSpecificOrigin");
 
+    // Authentication & Authorization - SIRALAMA ÖNEMLÝ
     app.UseAuthentication();
     app.UseAuthorization();
 
     app.MapControllers();
 
-  
-    Log.Information("TableManagement API started successfully");
+    // Database initialization - EKLENDI
+    using (var scope = app.Services.CreateScope())
+    {
+        var context = scope.ServiceProvider.GetRequiredService<ApplicationDbContext>();
+        try
+        {
+            // Ensure database is created
+            if (context.Database.EnsureCreated())
+            {
+                Log.Information("Database created successfully");
+            }
+            else
+            {
+                Log.Information("Database already exists");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Error ensuring database creation");
+            throw;
+        }
+    }
+
+    Log.Information("TableManagement API started successfully on {Urls}",
+        string.Join(", ", builder.WebHost.GetSetting("urls")?.Split(';') ?? new[] { "Unknown" }));
 
     app.Run();
 }
@@ -262,4 +333,3 @@ static string GetClientIPAddress(HttpContext context)
 
     return context.Connection.RemoteIpAddress?.ToString() ?? "Unknown";
 }
-

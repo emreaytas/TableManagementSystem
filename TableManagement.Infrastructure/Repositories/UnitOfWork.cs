@@ -6,6 +6,7 @@ namespace TableManagement.Infrastructure.Data
 {
     public class UnitOfWork : IUnitOfWork
     {
+
         private readonly ApplicationDbContext _context;
         private readonly Dictionary<Type, object> _repositories;
         private IDbContextTransaction? _transaction;
@@ -73,5 +74,6 @@ namespace TableManagement.Infrastructure.Data
             _transaction?.Dispose();
             _context.Dispose();
         }
+
     }
 }

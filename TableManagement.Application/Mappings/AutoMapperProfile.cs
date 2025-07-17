@@ -9,6 +9,15 @@ namespace TableManagement.Application.Mappings
     {
         public AutoMapperProfile()
         {
+            // User mappings - EKSİK OLAN BU SATIRDI!
+            CreateMap<User, UserDto>()
+                .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
+                .ForMember(dest => dest.FirstName, opt => opt.MapFrom(src => src.FirstName))
+                .ForMember(dest => dest.LastName, opt => opt.MapFrom(src => src.LastName))
+                .ForMember(dest => dest.Email, opt => opt.MapFrom(src => src.Email))
+                .ForMember(dest => dest.UserName, opt => opt.MapFrom(src => src.UserName))
+                .ForMember(dest => dest.IsEmailConfirmed, opt => opt.MapFrom(src => src.IsEmailConfirmed));
+
             // Table mappings
             CreateMap<CustomTable, TableResponse>()
                 .ForMember(dest => dest.Columns, opt => opt.MapFrom(src => src.Columns));
@@ -31,12 +40,14 @@ namespace TableManagement.Application.Mappings
                 .ForMember(dest => dest.CreatedAt, opt => opt.Ignore())
                 .ForMember(dest => dest.UpdatedAt, opt => opt.Ignore());
 
-            // User mappings
-            CreateMap<User, UserResponse>();
+            // Legacy User response mapping (if needed)
+            CreateMap<User, UserResponse>()
+                .ForMember(dest => dest.Username, opt => opt.MapFrom(src => src.UserName))
+                .ForMember(dest => dest.CreatedAt, opt => opt.MapFrom(src => DateTime.Now)); // Default value
         }
     }
 
-    // User response DTO if needed
+    // User response DTO if needed for other purposes
     public class UserResponse
     {
         public int Id { get; set; }

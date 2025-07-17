@@ -12,5 +12,6 @@ namespace TableManagement.Core.Interfaces
         Task<IDbContextTransaction> BeginTransactionAsync();
         Task CommitTransactionAsync();
         Task RollbackTransactionAsync();
+
     }
 }

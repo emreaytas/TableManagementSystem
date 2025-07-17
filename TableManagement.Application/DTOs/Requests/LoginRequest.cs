@@ -1,18 +1,20 @@
-﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel.DataAnnotations;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System.ComponentModel.DataAnnotations;
 
-namespace TableManagement.Core.DTOs.Requests
+namespace TableManagement.Application.DTOs.Requests
 {
     public class LoginRequest
     {
-        [Required]
-        public string UserName { get; set; }
+        [Required(ErrorMessage = "Kullanıcı adı zorunludur.")]
+        [StringLength(50, MinimumLength = 3, ErrorMessage = "Kullanıcı adı 3-50 karakter arasında olmalıdır.")]
+        public string UserName { get; set; } = string.Empty;
 
-        [Required]
-        public string Password { get; set; }
+        [Required(ErrorMessage = "Şifre zorunludur.")]
+        [StringLength(100, MinimumLength = 6, ErrorMessage = "Şifre en az 6 karakter olmalıdır.")]
+        public string Password { get; set; } = string.Empty;
+
+        public override string ToString()
+        {
+            return $"LoginRequest: UserName='{UserName}'";
+        }
     }
 }

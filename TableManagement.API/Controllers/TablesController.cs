@@ -70,6 +70,38 @@ namespace TableManagement.API.Controllers
         }
 
         /// <summary>
+        /// Giriş yapmış kullanıcının tüm tablolarını listeler
+        /// </summary>
+        [HttpGet]
+        public async Task<IActionResult> GetUserTables()
+        {
+            try
+            {
+                var userId = GetCurrentUserId();
+                _logger.LogInformation("Getting tables for user {UserId}", userId);
+
+                var tables = await _tableService.GetUserTablesAsync(userId);
+
+                return Ok(new
+                {
+                    success = true,
+                    data = tables,
+                    message = "Tablolar başarıyla getirildi."
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting tables for user {UserId}", GetCurrentUserId());
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = "Tablolar getirilirken bir hata oluştu."
+                });
+            }
+        }
+
+
+        /// <summary>
         /// Updates table structure and data
         /// </summary>
         [HttpPut("{id}")]

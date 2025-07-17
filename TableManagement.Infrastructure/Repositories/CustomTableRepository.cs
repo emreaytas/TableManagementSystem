@@ -13,31 +13,40 @@ namespace TableManagement.Infrastructure.Repositories
 
         public async Task<IEnumerable<CustomTable>> GetUserTablesAsync(int userId)
         {
-            return await _dbSet
+            return await _context.CustomTables
+                .Include(t => t.Columns.OrderBy(c => c.DisplayOrder))
                 .Where(t => t.UserId == userId)
-                .Include(t => t.Columns)
+                .OrderByDescending(t => t.CreatedAt)
                 .ToListAsync();
         }
 
-        public async Task<CustomTable> GetTableWithColumnsAsync(int tableId)
+        public async Task<CustomTable?> GetUserTableByIdAsync(int tableId, int userId)
         {
-            return await _dbSet
-                .Include(t => t.Columns)
-                .FirstOrDefaultAsync(t => t.Id == tableId);
-        }
-
-        public async Task<CustomTable> GetTableWithDataAsync(int tableId)
-        {
-            return await _dbSet
-                .Include(t => t.Columns)
-                .Include(t => t.TableData)
-                .ThenInclude(td => td.Column)
-                .FirstOrDefaultAsync(t => t.Id == tableId);
+            return await _context.CustomTables
+                .Include(t => t.Columns.OrderBy(c => c.DisplayOrder))
+                .FirstOrDefaultAsync(t => t.Id == tableId && t.UserId == userId);
         }
 
         public async Task<bool> TableNameExistsForUserAsync(string tableName, int userId)
         {
-            return await _dbSet.AnyAsync(t => t.TableName == tableName && t.UserId == userId);
+            return await _context.CustomTables
+                .AnyAsync(t => t.TableName == tableName && t.UserId == userId);
+        }
+
+        public async Task<IEnumerable<CustomTable>> GetUserTablesWithColumnsAsync(int userId)
+        {
+            return await _context.CustomTables
+                .Include(t => t.Columns.OrderBy(c => c.DisplayOrder))
+                .Where(t => t.UserId == userId)
+                .OrderByDescending(t => t.CreatedAt)
+                .ToListAsync();
+        }
+
+        public async Task<CustomTable?> GetUserTableWithColumnsAsync(int tableId, int userId)
+        {
+            return await _context.CustomTables
+                .Include(t => t.Columns.OrderBy(c => c.DisplayOrder))
+                .FirstOrDefaultAsync(t => t.Id == tableId && t.UserId == userId);
         }
     }
 }

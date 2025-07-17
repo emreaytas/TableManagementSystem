@@ -15,6 +15,11 @@ namespace TableManagement.Core.Enums
         Int = 2,
         Decimal = 3,
         DateTime = 4
+    ,VARCHAR = 1,
+    INT = 2,
+    DECIMAL = 3,
+    DATETIME = 4
+
     }
   
 

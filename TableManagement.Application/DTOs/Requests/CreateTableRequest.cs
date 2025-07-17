@@ -1,25 +1,27 @@
 ﻿using System.ComponentModel.DataAnnotations;
 using TableManagement.Core.Enums;
 
-namespace TableManagement.Application.DTOs.Requests
+namespace TableManagement.Core.DTOs.Requests
 {
     public class CreateTableRequest
     {
         [Required]
-        [MaxLength(100)]
-        public string TableName { get; set; }
+        [MaxLength(50)]
+        public string TableName { get; set; } = string.Empty;
 
         [MaxLength(500)]
-        public string Description { get; set; }
+        public string? Description { get; set; }
 
-        public List<CreateColumnRequest> Columns { get; set; } = new List<CreateColumnRequest>();
+        [Required]
+        [MinLength(1, ErrorMessage = "En az bir kolon eklemelisiniz")]
+        public List<CreateColumnRequest> Columns { get; set; } = new();
     }
 
     public class CreateColumnRequest
     {
         [Required]
-        [MaxLength(100)]
-        public string ColumnName { get; set; }
+        [MaxLength(50)]
+        public string ColumnName { get; set; } = string.Empty;
 
         [Required]
         public ColumnDataType DataType { get; set; }
@@ -29,6 +31,6 @@ namespace TableManagement.Application.DTOs.Requests
         public int DisplayOrder { get; set; }
 
         [MaxLength(255)]
-        public string DefaultValue { get; set; }
+        public string? DefaultValue { get; set; }
     }
 }

@@ -1,14 +1,13 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System.ComponentModel.DataAnnotations;
 
-namespace TableManagement.Core.DTOs.Requests
+namespace TableManagement.Application.DTOs.Requests
 {
     public class AddTableDataRequest
     {
+        [Required]
         public int TableId { get; set; }
-        public Dictionary<int, string> ColumnValues { get; set; } = new Dictionary<int, string>();
+
+        [Required]
+        public Dictionary<int, string> ColumnValues { get; set; } = new();
     }
 }

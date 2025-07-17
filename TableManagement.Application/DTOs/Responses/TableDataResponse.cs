@@ -3,9 +3,9 @@
     public class TableDataResponse
     {
         public int TableId { get; set; }
-        public string TableName { get; set; }
-        public List<ColumnResponse> Columns { get; set; } = new List<ColumnResponse>();
-        public List<TableRowResponse> Rows { get; set; } = new List<TableRowResponse>();
+        public string TableName { get; set; } = string.Empty;
+        public List<ColumnResponse> Columns { get; set; } = new();
+        public List<Dictionary<string, object>> Data { get; set; } = new();
     }
 
     public class TableRowResponse

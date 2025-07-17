@@ -1,8 +1,9 @@
 ﻿using System.ComponentModel.DataAnnotations;
+using TableManagement.Core.Enums;
 
 namespace TableManagement.Application.DTOs.Requests
 {
-    public class UpdateTableRequest
+    public class ValidateTableUpdateRequest
     {
         [Required]
         public int TableId { get; set; }

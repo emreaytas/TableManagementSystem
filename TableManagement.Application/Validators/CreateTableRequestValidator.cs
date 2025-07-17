@@ -2,6 +2,7 @@
 using TableManagement.Application.DTOs.Requests;
 using TableManagement.Core.Enums;
 using System.Text.RegularExpressions;
+using TableManagement.Core.DTOs.Requests;
 
 namespace TableManagement.Application.Validators
 {

@@ -4,6 +4,8 @@ using TableManagement.Application.DTOs.Responses;
 using TableManagement.Core.DTOs.Requests;
 using TableManagement.Core.Entities;
 using TableManagement.Core.Interfaces;
+using TableManagement.Core.Enums;
+using Microsoft.Extensions.Logging;
 
 namespace TableManagement.Application.Services
 {
@@ -12,14 +14,21 @@ namespace TableManagement.Application.Services
         private readonly IUnitOfWork _unitOfWork;
         private readonly IMapper _mapper;
         private readonly IDataDefinitionService _dataDefinitionService;
+        private readonly ILogger<TableService> _logger;
 
-        public TableService(IUnitOfWork unitOfWork, IMapper mapper, IDataDefinitionService dataDefinitionService)
+        public TableService(
+            IUnitOfWork unitOfWork,
+            IMapper mapper,
+            IDataDefinitionService dataDefinitionService,
+            ILogger<TableService> logger)
         {
             _unitOfWork = unitOfWork;
             _mapper = mapper;
             _dataDefinitionService = dataDefinitionService;
+            _logger = logger;
         }
 
+        // Existing implementations...
         public async Task<TableResponse> CreateTableAsync(CreateTableRequest request, int userId)
         {
             using var transaction = await _unitOfWork.BeginTransactionAsync();
@@ -73,14 +82,12 @@ namespace TableManagement.Application.Services
                 }
 
                 await _unitOfWork.CommitTransactionAsync();
-
-                var createdTable = await _unitOfWork.CustomTables.GetTableWithColumnsAsync(table.Id);
-                return _mapper.Map<TableResponse>(createdTable);
+                return _mapper.Map<TableResponse>(table);
             }
-            catch (Exception ex)
+            catch
             {
                 await _unitOfWork.RollbackTransactionAsync();
-                throw new ApplicationException("Tablo oluşturulurken bir hata oluştu.", ex);
+                throw;
             }
         }
 
@@ -92,354 +99,498 @@ namespace TableManagement.Application.Services
 
         public async Task<TableResponse> GetTableByIdAsync(int tableId, int userId)
         {
-            var table = await _unitOfWork.CustomTables.GetTableWithColumnsAsync(tableId);
-            if (table == null || table.UserId != userId)
-            {
-                return null;
-            }
+            var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(tableId, userId);
+            if (table == null)
+                throw new ArgumentException("Tablo bulunamadı.");
 
             return _mapper.Map<TableResponse>(table);
         }
 
         public async Task<bool> DeleteTableAsync(int tableId, int userId)
         {
-            var table = await _unitOfWork.CustomTables.GetByIdAsync(tableId);
-            if (table == null || table.UserId != userId)
-            {
-                return false;
-            }
+            using var transaction = await _unitOfWork.BeginTransactionAsync();
 
             try
             {
-                // Delete actual database table first
-                var ddlResult = await _dataDefinitionService.DropUserTableAsync(table.TableName, userId);
-                if (!ddlResult)
-                {
-                    // Log warning but continue with metadata deletion
-                    // Bu durumda metadata'yı silmek isteyebilirsiniz
-                }
+                var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(tableId, userId);
+                if (table == null)
+                    return false;
+
+                // Delete actual database table
+                await _dataDefinitionService.DropUserTableAsync(table.TableName, userId);
 
                 // Delete metadata
                 await _unitOfWork.CustomTables.DeleteAsync(table);
                 await _unitOfWork.SaveChangesAsync();
+                await _unitOfWork.CommitTransactionAsync();
 
                 return true;
             }
-            catch (Exception)
+            catch
             {
-                return false;
+                await _unitOfWork.RollbackTransactionAsync();
+                throw;
             }
         }
 
         public async Task<TableDataResponse> GetTableDataAsync(int tableId, int userId)
         {
-            var table = await _unitOfWork.CustomTables.GetTableWithColumnsAsync(tableId);
-            if (table == null || table.UserId != userId)
+            var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(tableId, userId);
+            if (table == null)
+                throw new ArgumentException("Tablo bulunamadı.");
+
+            var data = await _dataDefinitionService.SelectDataFromUserTableAsync(table.TableName, userId);
+
+            return new TableDataResponse
             {
-                return null;
-            }
-
-            try
-            {
-                // Get data from actual database table
-                var tableData = await _dataDefinitionService.SelectDataFromUserTableAsync(table.TableName, userId);
-
-                var response = new TableDataResponse
-                {
-                    TableId = table.Id,
-                    TableName = table.TableName,
-                    Columns = _mapper.Map<List<ColumnResponse>>(table.Columns.OrderBy(c => c.DisplayOrder))
-                };
-
-                // Convert data to expected format
-                foreach (var row in tableData)
-                {
-                    var tableRow = new TableRowResponse
-                    {
-                        RowIdentifier = (int)(row.ContainsKey("Id") ? row["Id"] : 0),
-                        Values = new Dictionary<int, string>()
-                    };
-
-                    // Map column data to column IDs
-                    foreach (var column in table.Columns)
-                    {
-                        if (row.ContainsKey(column.ColumnName))
-                        {
-                            tableRow.Values[column.Id] = row[column.ColumnName]?.ToString() ?? string.Empty;
-                        }
-                    }
-
-                    response.Rows.Add(tableRow);
-                }
-
-                return response;
-            }
-            catch (Exception)
-            {
-                return null;
-            }
+                TableId = tableId,
+                TableName = table.TableName,
+                Columns = _mapper.Map<List<ColumnResponse>>(table.Columns),
+                Data = data
+            };
         }
 
         public async Task<bool> AddTableDataAsync(AddTableDataRequest request, int userId)
         {
-            try
-            {
-                var table = await _unitOfWork.CustomTables.GetTableWithColumnsAsync(request.TableId);
-                if (table == null || table.UserId != userId)
-                {
-                    return false;
-                }
+            var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(request.TableId, userId);
+            if (table == null)
+                throw new ArgumentException("Tablo bulunamadı.");
 
-                // Convert column IDs to column names with values
-                var data = new Dictionary<string, object>();
-                foreach (var columnValue in request.ColumnValues)
-                {
-                    var column = table.Columns.FirstOrDefault(c => c.Id == columnValue.Key);
-                    if (column != null)
-                    {
-                        // Convert value to appropriate type
-                        var convertedValue = ConvertValueToType(columnValue.Value, column.DataType);
-                        data[column.ColumnName] = convertedValue;
-                    }
-                }
-
-                // Insert data to actual database table
-                return await _dataDefinitionService.InsertDataToUserTableAsync(table.TableName, data, userId);
-            }
-            catch (Exception)
+            // Convert column values to proper format
+            var data = new Dictionary<string, object>();
+            foreach (var column in table.Columns)
             {
-                return false;
+                if (request.ColumnValues.ContainsKey(column.Id))
+                {
+                    data[column.ColumnName] = request.ColumnValues[column.Id];
+                }
             }
+
+            return await _dataDefinitionService.InsertDataToUserTableAsync(table.TableName, data, userId);
         }
 
         public async Task<bool> UpdateTableDataAsync(int tableId, int rowIdentifier, Dictionary<int, string> values, int userId)
         {
-            try
-            {
-                var table = await _unitOfWork.CustomTables.GetTableWithColumnsAsync(tableId);
-                if (table == null || table.UserId != userId)
-                {
-                    return false;
-                }
+            var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(tableId, userId);
+            if (table == null)
+                throw new ArgumentException("Tablo bulunamadı.");
 
-                // Convert column IDs to column names with values
-                var data = new Dictionary<string, object>();
-                foreach (var value in values)
-                {
-                    var column = table.Columns.FirstOrDefault(c => c.Id == value.Key);
-                    if (column != null)
-                    {
-                        var convertedValue = ConvertValueToType(value.Value, column.DataType);
-                        data[column.ColumnName] = convertedValue;
-                    }
-                }
-
-                var whereClause = $"Id = {rowIdentifier}";
-                return await _dataDefinitionService.UpdateDataInUserTableAsync(table.TableName, data, whereClause, userId);
-            }
-            catch (Exception)
+            // Convert column values to proper format
+            var data = new Dictionary<string, object>();
+            foreach (var column in table.Columns)
             {
-                return false;
+                if (values.ContainsKey(column.Id))
+                {
+                    data[column.ColumnName] = values[column.Id];
+                }
             }
+
+            var whereClause = $"RowIdentifier = {rowIdentifier}";
+            return await _dataDefinitionService.UpdateDataInUserTableAsync(table.TableName, data, whereClause, userId);
         }
 
         public async Task<bool> DeleteTableDataAsync(int tableId, int rowIdentifier, int userId)
         {
-            try
-            {
-                var table = await _unitOfWork.CustomTables.GetByIdAsync(tableId);
-                if (table == null || table.UserId != userId)
-                {
-                    return false;
-                }
+            var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(tableId, userId);
+            if (table == null)
+                throw new ArgumentException("Tablo bulunamadı.");
 
-                var whereClause = $"Id = {rowIdentifier}";
-                return await _dataDefinitionService.DeleteDataFromUserTableAsync(table.TableName, whereClause, userId);
-            }
-            catch (Exception)
-            {
-                return false;
-            }
+            var whereClause = $"RowIdentifier = {rowIdentifier}";
+            return await _dataDefinitionService.DeleteDataFromUserTableAsync(table.TableName, whereClause, userId);
         }
 
-        private object ConvertValueToType(string value, Core.Enums.ColumnDataType dataType)
-        {
-            if (string.IsNullOrEmpty(value))
-                return DBNull.Value;
-
-            return dataType switch
-            {
-                Core.Enums.ColumnDataType.Int => int.TryParse(value, out int intValue) ? intValue : DBNull.Value,
-                Core.Enums.ColumnDataType.Decimal => decimal.TryParse(value, out decimal decimalValue) ? decimalValue : DBNull.Value,
-                Core.Enums.ColumnDataType.DateTime => DateTime.TryParse(value, out DateTime dateValue) ? dateValue : DBNull.Value,
-                Core.Enums.ColumnDataType.Varchar => value,
-                _ => value
-            };
-        }
-
+        // New methods for enhanced update system
         public async Task<ColumnUpdateResult> UpdateColumnAsync(int tableId, UpdateColumnRequest request, int userId)
         {
+            var result = new ColumnUpdateResult();
+
             try
             {
-                var table = await _unitOfWork.CustomTables.GetTableWithColumnsAsync(tableId);
-                if (table == null || table.UserId != userId)
+                var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(tableId, userId);
+                if (table == null)
                 {
-                    return new ColumnUpdateResult
-                    {
-                        Success = false,
-                        Message = "Tablo bulunamadı veya erişim yetkiniz yok"
-                    };
+                    result.Message = "Tablo bulunamadı";
+                    return result;
                 }
 
                 var column = table.Columns.FirstOrDefault(c => c.Id == request.ColumnId);
                 if (column == null)
                 {
-                    return new ColumnUpdateResult
-                    {
-                        Success = false,
-                        Message = "Kolon bulunamadı"
-                    };
+                    result.Message = "Kolon bulunamadı";
+                    return result;
                 }
 
-                var result = new ColumnUpdateResult();
+                // Perform DDL update
+                var ddlResult = await _dataDefinitionService.UpdateColumnAsync(table.TableName, column, request, userId);
 
-                // Veri tipi değişikliği var mı kontrol et
-                if (column.DataType != request.DataType)
+                if (ddlResult.Success)
                 {
-                    var ddlResult = await _dataDefinitionService.UpdateColumnDataTypeAsync(
-                        table.TableName, column.ColumnName, request.DataType, request.ForceUpdate, userId);
+                    // Update metadata
+                    column.ColumnName = request.ColumnName;
+                    column.DataType = request.DataType;
+                    column.IsRequired = request.IsRequired;
+                    column.DisplayOrder = request.DisplayOrder;
+                    column.DefaultValue = request.DefaultValue;
+                    column.UpdatedAt = DateTime.UtcNow;
 
-                    if (!ddlResult.Success)
-                    {
-                        return ddlResult;
-                    }
-
-                    result.ValidationResult = ddlResult.ValidationResult;
-                    result.ExecutedQueries.AddRange(ddlResult.ExecutedQueries);
+                    await _unitOfWork.SaveChangesAsync();
                 }
 
-                // Kolon adı değişikliği var mı kontrol et
-                if (column.ColumnName != request.ColumnName)
-                {
-                    var renameResult = await _dataDefinitionService.RenameColumnAsync(
-                        table.TableName, column.ColumnName, request.ColumnName, userId);
-
-                    if (!renameResult)
-                    {
-                        return new ColumnUpdateResult
-                        {
-                            Success = false,
-                            Message = "Kolon adı güncellenemedi"
-                        };
-                    }
-
-                    result.ExecutedQueries.Add($"sp_rename '{table.TableName}.{column.ColumnName}', '{request.ColumnName}', 'COLUMN'");
-                }
-
-                // NULL/NOT NULL durumu değişikliği var mı kontrol et
-                if (column.IsRequired != request.IsRequired)
-                {
-                    var nullabilityResult = await _dataDefinitionService.UpdateColumnNullabilityAsync(
-                        table.TableName, request.ColumnName, request.IsRequired, userId);
-
-                    if (!nullabilityResult)
-                    {
-                        return new ColumnUpdateResult
-                        {
-                            Success = false,
-                            Message = "Kolon zorunluluk durumu güncellenemedi"
-                        };
-                    }
-
-                    result.ExecutedQueries.Add($"ALTER TABLE {table.TableName} ALTER COLUMN {request.ColumnName} ... {(request.IsRequired ? "NOT NULL" : "NULL")}");
-                }
-
-                // Default value değişikliği var mı kontrol et
-                if (column.DefaultValue != request.DefaultValue)
-                {
-                    var defaultResult = await _dataDefinitionService.UpdateColumnDefaultValueAsync(
-                        table.TableName, request.ColumnName, request.DefaultValue ?? "", userId);
-
-                    if (!defaultResult)
-                    {
-                        return new ColumnUpdateResult
-                        {
-                            Success = false,
-                            Message = "Kolon varsayılan değeri güncellenemedi"
-                        };
-                    }
-
-                    result.ExecutedQueries.Add($"ALTER TABLE {table.TableName} ADD/DROP DEFAULT CONSTRAINT");
-                }
-
-                // Metadata'yı güncelle
-                column.ColumnName = request.ColumnName;
-                column.DataType = request.DataType;
-                column.IsRequired = request.IsRequired;
-                column.DisplayOrder = request.DisplayOrder;
-                column.DefaultValue = request.DefaultValue;
-                column.UpdatedAt = DateTime.UtcNow;
-
-                await _unitOfWork.Repository<CustomColumn>().UpdateAsync(column);
-                await _unitOfWork.SaveChangesAsync();
-
-                result.Success = true;
-                result.Message = "Kolon başarıyla güncellendi";
-
-                return result;
+                result.Success = ddlResult.Success;
+                result.Message = ddlResult.Message;
+                result.ExecutedQueries = ddlResult.ExecutedQueries ?? new List<string>();
+                result.AffectedRows = ddlResult.AffectedRows;
+                result.ValidationResult = ddlResult.ValidationResult;
             }
             catch (Exception ex)
             {
-                return new ColumnUpdateResult
-                {
-                    Success = false,
-                    Message = "Kolon güncellenirken hata oluştu: " + ex.Message
-                };
+                _logger.LogError(ex, "Error updating column {ColumnId} in table {TableId}", request.ColumnId, tableId);
+                result.Message = "Kolon güncellenirken hata oluştu: " + ex.Message;
             }
+
+            return result;
         }
 
         public async Task<ColumnValidationResult> ValidateColumnUpdateAsync(int tableId, UpdateColumnRequest request, int userId)
         {
+            var result = new ColumnValidationResult();
+
             try
             {
-                var table = await _unitOfWork.CustomTables.GetTableWithColumnsAsync(tableId);
-                if (table == null || table.UserId != userId)
+                var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(tableId, userId);
+                if (table == null)
                 {
-                    return new ColumnValidationResult
-                    {
-                        IsValid = false,
-                        Issues = new List<string> { "Tablo bulunamadı veya erişim yetkiniz yok" }
-                    };
+                    result.IsValid = false;
+                    result.Issues.Add("Tablo bulunamadı");
+                    return result;
                 }
 
                 var column = table.Columns.FirstOrDefault(c => c.Id == request.ColumnId);
                 if (column == null)
                 {
-                    return new ColumnValidationResult
-                    {
-                        IsValid = false,
-                        Issues = new List<string> { "Kolon bulunamadı" }
-                    };
+                    result.IsValid = false;
+                    result.Issues.Add("Kolon bulunamadı");
+                    return result;
                 }
 
-                // Veri tipi değişikliği kontrolü
-                if (column.DataType != request.DataType)
-                {
-                    return await _dataDefinitionService.ValidateColumnUpdateAsync(
-                        table.TableName, column.ColumnName, request.DataType, userId);
-                }
-
-                // Diğer değişiklikler için basit validasyon
-                return new ColumnValidationResult { IsValid = true };
+                // Validate with DDL service
+                result = await _dataDefinitionService.ValidateColumnDataTypeChangeAsync(
+                    table.TableName, column.ColumnName, column.DataType, request.DataType, userId);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                return new ColumnValidationResult
-                {
-                    IsValid = false,
-                    Issues = new List<string> { "Validasyon sırasında hata oluştu" }
-                };
+                _logger.LogError(ex, "Error validating column update for table {TableId}", tableId);
+                result.IsValid = false;
+                result.Issues.Add("Validasyon sırasında hata oluştu: " + ex.Message);
             }
+
+            return result;
+        }
+
+        public async Task<TableValidationResult> ValidateTableUpdateAsync(int tableId, ValidateTableUpdateRequest request, int userId)
+        {
+            var result = new TableValidationResult();
+
+            try
+            {
+                var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(tableId, userId);
+                if (table == null)
+                {
+                    result.IsValid = false;
+                    result.Issues.Add("Tablo bulunamadı");
+                    return result;
+                }
+
+                // Check table name changes
+                if (table.TableName != request.TableName)
+                {
+                    result.HasStructuralChanges = true;
+                    var nameExists = await _unitOfWork.CustomTables.TableNameExistsForUserAsync(request.TableName, userId);
+                    if (nameExists)
+                    {
+                        result.IsValid = false;
+                        result.Issues.Add("Bu tablo adı zaten kullanılıyor");
+                    }
+                }
+
+                // Validate columns if provided
+                if (request.Columns != null && request.Columns.Any())
+                {
+                    await ValidateColumnChangesAsync(table, request.Columns, result, userId);
+                }
+
+                // Get affected row count
+                result.AffectedRowCount = await _dataDefinitionService.GetTableRowCountAsync(table.TableName, userId);
+
+                // Estimate backup size if structural changes exist
+                if (result.HasStructuralChanges && result.AffectedRowCount > 0)
+                {
+                    result.EstimatedBackupSize = await _dataDefinitionService.EstimateTableSizeAsync(table.TableName, userId);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error validating table update for table {TableId}", tableId);
+                result.IsValid = false;
+                result.Issues.Add("Validasyon sırasında hata oluştu: " + ex.Message);
+            }
+
+            return result;
+        }
+
+        private async Task ValidateColumnChangesAsync(CustomTable existingTable, List<UpdateColumnRequest> newColumns, TableValidationResult result, int userId)
+        {
+            var existingColumns = existingTable.Columns.ToList();
+
+            // Check for column deletions
+            var deletedColumns = existingColumns.Where(ec => !newColumns.Any(nc => nc.ColumnId == ec.Id)).ToList();
+            foreach (var deletedColumn in deletedColumns)
+            {
+                result.HasStructuralChanges = true;
+                var hasData = await _dataDefinitionService.ColumnHasDataAsync(existingTable.TableName, deletedColumn.ColumnName, userId);
+                if (hasData)
+                {
+                    result.HasDataCompatibilityIssues = true;
+                    result.RequiresForceUpdate = true;
+                    result.ColumnIssues[$"{deletedColumn.ColumnName}"] = new List<string> { "Kolonun silinmesi veri kaybına neden olacak" };
+                }
+            }
+
+            // Check for new columns
+            var newColumnRequests = newColumns.Where(nc => nc.ColumnId == null || nc.ColumnId == 0).ToList();
+            foreach (var newColumn in newColumnRequests)
+            {
+                result.HasStructuralChanges = true;
+
+                if (newColumn.IsRequired && string.IsNullOrEmpty(newColumn.DefaultValue))
+                {
+                    var hasExistingData = await _dataDefinitionService.GetTableRowCountAsync(existingTable.TableName, userId) > 0;
+                    if (hasExistingData)
+                    {
+                        result.HasDataCompatibilityIssues = true;
+                        result.RequiresForceUpdate = true;
+                        result.ColumnIssues[newColumn.ColumnName] = new List<string> { "Zorunlu kolon mevcut verilerle uyumlu değil" };
+                    }
+                }
+            }
+
+            // Check for column modifications
+            foreach (var modifiedColumn in newColumns.Where(nc => nc.ColumnId.HasValue && nc.ColumnId > 0))
+            {
+                var existingColumn = existingColumns.FirstOrDefault(ec => ec.Id == modifiedColumn.ColumnId);
+                if (existingColumn == null) continue;
+
+                if (existingColumn.DataType != modifiedColumn.DataType)
+                {
+                    result.HasStructuralChanges = true;
+
+                    var validationResult = await _dataDefinitionService.ValidateColumnDataTypeChangeAsync(
+                        existingTable.TableName, existingColumn.ColumnName, existingColumn.DataType, modifiedColumn.DataType, userId);
+
+                    if (!validationResult.IsValid)
+                    {
+                        result.IsValid = false;
+                        result.ColumnIssues[existingColumn.ColumnName] = validationResult.Issues;
+                    }
+                    else if (validationResult.HasDataCompatibilityIssues)
+                    {
+                        result.HasDataCompatibilityIssues = true;
+                        if (validationResult.RequiresForceUpdate)
+                        {
+                            result.RequiresForceUpdate = true;
+                        }
+                        result.ColumnIssues[existingColumn.ColumnName] = validationResult.DataIssues;
+                    }
+                }
+
+                // Check required constraint changes
+                if (!existingColumn.IsRequired && modifiedColumn.IsRequired)
+                {
+                    var hasNullData = await _dataDefinitionService.ColumnHasNullDataAsync(existingTable.TableName, existingColumn.ColumnName, userId);
+                    if (hasNullData)
+                    {
+                        result.HasDataCompatibilityIssues = true;
+                        result.RequiresForceUpdate = true;
+                        if (!result.ColumnIssues.ContainsKey(existingColumn.ColumnName))
+                            result.ColumnIssues[existingColumn.ColumnName] = new List<string>();
+                        result.ColumnIssues[existingColumn.ColumnName].Add("Kolonun zorunlu yapılması NULL verilerle uyumlu değil");
+                    }
+                }
+            }
+        }
+
+        public async Task<TableUpdateResult> UpdateTableAsync(int tableId, UpdateTableRequest request, int userId)
+        {
+            var result = new TableUpdateResult();
+
+            using var transaction = await _unitOfWork.BeginTransactionAsync();
+
+            try
+            {
+                var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(tableId, userId);
+                if (table == null)
+                {
+                    result.Message = "Tablo bulunamadı";
+                    return result;
+                }
+
+                var executedQueries = new List<string>();
+                var totalAffectedRows = 0;
+
+                // Create backup if needed
+                var hasStructuralChanges = await HasStructuralChangesAsync(table, request);
+                if (hasStructuralChanges)
+                {
+                    var backupResult = await _dataDefinitionService.CreateTableBackupAsync(table.TableName, userId);
+                    result.BackupCreated = backupResult.Success;
+                    if (backupResult.Success)
+                    {
+                        executedQueries.AddRange(backupResult.ExecutedQueries ?? new List<string>());
+                    }
+                }
+
+                // Update table metadata
+                table.TableName = request.TableName;
+                table.Description = request.Description;
+                table.UpdatedAt = DateTime.UtcNow;
+
+                // Handle column changes
+                if (request.Columns != null && request.Columns.Any())
+                {
+                    var columnUpdateResult = await UpdateTableColumnsAsync(table, request.Columns, userId);
+                    executedQueries.AddRange(columnUpdateResult.ExecutedQueries);
+                    totalAffectedRows += columnUpdateResult.AffectedRows;
+                }
+
+                await _unitOfWork.SaveChangesAsync();
+                await _unitOfWork.CommitTransactionAsync();
+
+                result.Success = true;
+                result.Message = "Tablo başarıyla güncellendi";
+                result.Table = _mapper.Map<TableResponse>(table);
+                result.ExecutedQueries = executedQueries;
+                result.AffectedRows = totalAffectedRows;
+
+                _logger.LogInformation("Table {TableId} updated successfully by user {UserId}", tableId, userId);
+            }
+            catch (Exception ex)
+            {
+                await _unitOfWork.RollbackTransactionAsync();
+                _logger.LogError(ex, "Error updating table {TableId} by user {UserId}", tableId, userId);
+                result.Message = "Tablo güncellenirken hata oluştu: " + ex.Message;
+            }
+
+            return result;
+        }
+
+        public async Task<TableCreateResult> CreateTableWithValidationAsync(CreateTableRequest request, int userId)
+        {
+            var result = new TableCreateResult();
+
+            try
+            {
+                var tableResponse = await CreateTableAsync(request, userId);
+                result.Success = true;
+                result.Message = "Tablo başarıyla oluşturuldu";
+                result.Table = tableResponse;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error creating table for user {UserId}", userId);
+                result.Message = "Tablo oluşturulurken hata oluştu: " + ex.Message;
+            }
+
+            return result;
+        }
+
+        private async Task<bool> HasStructuralChangesAsync(CustomTable existingTable, UpdateTableRequest request)
+        {
+            if (existingTable.TableName != request.TableName) return true;
+
+            if (request.Columns == null || !request.Columns.Any()) return false;
+
+            var existingColumnCount = existingTable.Columns.Count;
+            var newColumnCount = request.Columns.Count;
+
+            if (existingColumnCount != newColumnCount) return true;
+
+            foreach (var requestColumn in request.Columns.Where(c => c.ColumnId.HasValue))
+            {
+                var existingColumn = existingTable.Columns.FirstOrDefault(c => c.Id == requestColumn.ColumnId);
+                if (existingColumn == null) continue;
+
+                if (existingColumn.ColumnName != requestColumn.ColumnName ||
+                    existingColumn.DataType != requestColumn.DataType ||
+                    existingColumn.IsRequired != requestColumn.IsRequired)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private async Task<(List<string> ExecutedQueries, int AffectedRows)> UpdateTableColumnsAsync(CustomTable table, List<UpdateColumnRequest> columnRequests, int userId)
+        {
+            var executedQueries = new List<string>();
+            var totalAffectedRows = 0;
+
+            // Handle column deletions
+            var columnsToDelete = table.Columns.Where(ec => !columnRequests.Any(cr => cr.ColumnId == ec.Id)).ToList();
+            foreach (var columnToDelete in columnsToDelete)
+            {
+                var deleteResult = await _dataDefinitionService.DropColumnAsync(table.TableName, columnToDelete.ColumnName, userId);
+                if (deleteResult.Success)
+                {
+                    await _unitOfWork.Repository<CustomColumn>().DeleteAsync(columnToDelete);
+                    executedQueries.AddRange(deleteResult.ExecutedQueries ?? new List<string>());
+                }
+            }
+
+            // Handle new columns
+            var newColumns = columnRequests.Where(cr => cr.ColumnId == null || cr.ColumnId == 0).ToList();
+            foreach (var newColumnRequest in newColumns)
+            {
+                var addResult = await _dataDefinitionService.AddColumnAsync(table.TableName, newColumnRequest, userId);
+                if (addResult.Success)
+                {
+                    var newColumn = new CustomColumn
+                    {
+                        ColumnName = newColumnRequest.ColumnName,
+                        DataType = newColumnRequest.DataType,
+                        IsRequired = newColumnRequest.IsRequired,
+                        DisplayOrder = newColumnRequest.DisplayOrder,
+                        DefaultValue = newColumnRequest.DefaultValue,
+                        CustomTableId = table.Id
+                    };
+                    await _unitOfWork.Repository<CustomColumn>().AddAsync(newColumn);
+                    executedQueries.AddRange(addResult.ExecutedQueries ?? new List<string>());
+                }
+            }
+
+            // Handle column modifications
+            var modifiedColumns = columnRequests.Where(cr => cr.ColumnId.HasValue && cr.ColumnId > 0).ToList();
+            foreach (var modifiedColumnRequest in modifiedColumns)
+            {
+                var existingColumn = table.Columns.FirstOrDefault(c => c.Id == modifiedColumnRequest.ColumnId);
+                if (existingColumn == null) continue;
+
+                var updateResult = await _dataDefinitionService.UpdateColumnAsync(table.TableName, existingColumn, modifiedColumnRequest, userId);
+                if (updateResult.Success)
+                {
+                    existingColumn.ColumnName = modifiedColumnRequest.ColumnName;
+                    existingColumn.DataType = modifiedColumnRequest.DataType;
+                    existingColumn.IsRequired = modifiedColumnRequest.IsRequired;
+                    existingColumn.DisplayOrder = modifiedColumnRequest.DisplayOrder;
+                    existingColumn.DefaultValue = modifiedColumnRequest.DefaultValue;
+                    existingColumn.UpdatedAt = DateTime.UtcNow;
+
+                    executedQueries.AddRange(updateResult.ExecutedQueries ?? new List<string>());
+                    totalAffectedRows += updateResult.AffectedRows;
+                }
+            }
+
+            return (executedQueries, totalAffectedRows);
         }
     }
 }

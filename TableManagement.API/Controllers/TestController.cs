@@ -49,16 +49,22 @@ namespace TableManagement.API.Controllers
         [Authorize]
         public IActionResult TokenInfo()
         {
-            var claims = User.Claims.ToDictionary(c => c.Type, c => c.Value);
+            // Claim'leri türlerine göre grupla. 
+            // Tekrar eden türlerin değerlerini bir dizi içinde topla.
+            var claims = User.Claims
+                .GroupBy(c => c.Type)
+                .ToDictionary(g => g.Key, g => g.Select(c => c.Value).ToArray());
 
             return Ok(new
             {
                 isAuthenticated = User.Identity?.IsAuthenticated,
                 authenticationType = User.Identity?.AuthenticationType,
                 name = User.Identity?.Name,
-                claims = claims,
+                claims = claims, // Gruplanmış ve hatasız çalışan claim listesi
                 headers = Request.Headers.ToDictionary(h => h.Key, h => h.Value.ToString())
             });
+
+
         }
     }
 }

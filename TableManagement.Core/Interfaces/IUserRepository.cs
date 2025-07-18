@@ -13,6 +13,7 @@ namespace TableManagement.Core.Interfaces
         Task<User> GetByUserNameAsync(string userName);
         Task<bool> EmailExistsAsync(string email);
         Task<bool> UserNameExistsAsync(string userName);
+
     }
 
 }

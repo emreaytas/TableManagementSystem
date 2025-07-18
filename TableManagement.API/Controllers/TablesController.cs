@@ -31,10 +31,8 @@ namespace TableManagement.API.Controllers
             return int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "0");
         }
 
-        /// <summary>
-        /// Yeni tablo oluşturur
-        /// </summary>
-        [HttpPost]
+      
+        [HttpPost("CreateTable")]
         public async Task<IActionResult> CreateTable([FromBody] CreateTableRequest request)
         {
             if (!ModelState.IsValid)

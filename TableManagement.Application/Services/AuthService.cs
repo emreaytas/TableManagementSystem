@@ -12,6 +12,8 @@ using AutoMapper;
 using System.Web;
 using TableManagement.Core.DTOs.Requests;
 using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace TableManagement.Application.Services
 {
@@ -42,6 +44,25 @@ namespace TableManagement.Application.Services
             _emailService = emailService;
             _logger = logger;
         }
+
+        public async Task<IActionResult> GetAllUsers()
+        {
+            try
+            {
+
+                return new OkObjectResult(await _userManager.Users.ToListAsync());
+
+
+            }
+            catch (Exception ex)
+            {
+                return new StatusCodeResult(500); 
+
+            }
+
+
+        }
+
 
         public async Task<AuthResponse> LoginAsync(LoginRequest request)
         {
@@ -372,6 +393,42 @@ namespace TableManagement.Application.Services
                 return new AuthResponse { Success = false, Message = "Email doğrulama sırasında bir hata oluştu." };
             }
         }
+
+
+        public async Task<ServiceResponse> DeleteUserAsync(int id)
+        {
+            var user = await _userManager.FindByIdAsync(id.ToString());
+            if (user == null)
+            {
+                return new ServiceResponse
+                {
+                    Succeeded = false,
+                    Message = "Kullanıcı bulunamadı.",
+                    StatusCode = 404 // Not Found
+                };
+            }
+
+            var result = await _userManager.DeleteAsync(user);
+            if (!result.Succeeded)
+            {
+                return new ServiceResponse
+                {
+                    Succeeded = false,
+                    Message = "Kullanıcı silinirken bir hata oluştu.",
+                    Errors = result.Errors,
+                    StatusCode = 400 // Bad Request
+                };
+            }
+
+            return new ServiceResponse
+            {
+                Succeeded = true,
+                Message = "Kullanıcı başarıyla silindi.",
+                StatusCode = 200 // OK
+            };
+        }
+
+
 
         public async Task<AuthResponse> ResendEmailConfirmationAsync(string email)
         {

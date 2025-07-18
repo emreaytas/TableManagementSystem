@@ -1,9 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
+﻿
 using System.Linq.Expressions;
-using System.Text;
-using System.Threading.Tasks;
+
 
 namespace TableManagement.Core.Interfaces
 {
@@ -20,5 +17,6 @@ namespace TableManagement.Core.Interfaces
         Task DeleteRangeAsync(IEnumerable<T> entities);
         Task<int> CountAsync(Expression<Func<T, bool>> predicate = null);
         Task<bool> AnyAsync(Expression<Func<T, bool>> predicate);
+
     }
 }

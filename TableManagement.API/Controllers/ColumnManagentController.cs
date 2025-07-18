@@ -367,4 +367,6 @@ namespace TableManagement.API.Controllers
         [MaxLength(100)]
         public string NewColumnName { get; set; } = string.Empty;
     }
+
+
 }

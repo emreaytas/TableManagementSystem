@@ -15,6 +15,8 @@ namespace TableManagement.Core.DTOs.Requests
         [Required]
         [MinLength(1, ErrorMessage = "En az bir kolon eklemelisiniz")]
         public List<CreateColumnRequest> Columns { get; set; } = new();
+
+
     }
 
     public class CreateColumnRequest

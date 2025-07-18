@@ -9,7 +9,7 @@ namespace TableManagement.Application.Mappings
     {
         public AutoMapperProfile()
         {
-            // User mappings - EKSİK OLAN BU SATIRDI!
+       
             CreateMap<User, UserDto>()
                 .ForMember(dest => dest.Id, opt => opt.MapFrom(src => src.Id))
                 .ForMember(dest => dest.FirstName, opt => opt.MapFrom(src => src.FirstName))
@@ -18,7 +18,7 @@ namespace TableManagement.Application.Mappings
                 .ForMember(dest => dest.UserName, opt => opt.MapFrom(src => src.UserName))
                 .ForMember(dest => dest.IsEmailConfirmed, opt => opt.MapFrom(src => src.IsEmailConfirmed));
 
-            // Table mappings
+
             CreateMap<CustomTable, TableResponse>()
                 .ForMember(dest => dest.Columns, opt => opt.MapFrom(src => src.Columns));
 

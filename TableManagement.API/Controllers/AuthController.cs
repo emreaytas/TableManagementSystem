@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using System.Web;
 using TableManagement.Application.DTOs.Requests;
 using TableManagement.Application.Services;
@@ -24,13 +25,31 @@ namespace TableManagement.API.Controllers
             IAuthService authService,
             ILogger<AuthController> logger,
             ILoggingService loggingService,
-            UserManager<TableManagement.Core.Entities.User> userManager,IConfiguration configuration)
+            UserManager<TableManagement.Core.Entities.User> userManager, IConfiguration configuration)
         {
             _loggingService = loggingService;
             _authService = authService;
             _logger = logger;
             _configuration = configuration;
             _userManager = userManager;
+        }
+
+
+        [HttpGet("allusers")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        public async Task<IActionResult> GetAllUsers()
+        {
+            try
+            {
+                var users = await _userManager.Users.ToListAsync();
+                return Ok(users);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving all users");
+                return StatusCode(500, new { message = "Sunucu hatası. Lütfen daha sonra tekrar deneyin." });
+            }
         }
 
         /// <summary>
@@ -332,5 +351,30 @@ namespace TableManagement.API.Controllers
 
             return BadRequest(result);
         }
+
+
+        [HttpDelete("deleteuser/{id}")]
+        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status404NotFound)]
+        public async Task<IActionResult> DeleteUser([FromRoute] int id)
+        {
+            var serviceResult = await _authService.DeleteUserAsync(id);
+
+            // Servisten dönen duruma göre HTTP yanıtını oluştur
+            return serviceResult.StatusCode switch
+            {
+                404 => NotFound(new { message = serviceResult.Message }),
+                400 => BadRequest(new { message = serviceResult.Message, errors = serviceResult.Errors }),
+                200 => Ok(new { message = serviceResult.Message }),
+                // Beklenmedik bir durum için varsayılan hata
+                _ => StatusCode(500, new { message = "Beklenmedik bir sunucu hatası oluştu." })
+            };
+        
+        
+        }
+
+
+
     }
 }

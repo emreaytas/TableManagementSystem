@@ -27,5 +27,6 @@ namespace TableManagement.Core.Entities
         public virtual ICollection<CustomTable> CustomTables { get; set; } = new List<CustomTable>();
 
 
+
     }
 }

@@ -9,6 +9,10 @@ using Microsoft.Extensions.Logging;
 
 namespace TableManagement.Application.Services
 {
+
+
+
+
     public class TableService : ITableService
     {
         private readonly IUnitOfWork _unitOfWork;
@@ -28,7 +32,9 @@ namespace TableManagement.Application.Services
             _logger = logger;
         }
 
-        // Existing implementations...
+
+
+
         public async Task<TableResponse> CreateTableAsync(CreateTableRequest request, int userId)
         {
             using var transaction = await _unitOfWork.BeginTransactionAsync();

@@ -678,7 +678,7 @@ namespace TableManagement.Application.Services
             if (table == null)
                 throw new ArgumentException("Tablo bulunamadı.");
 
-            // Column name'leri kullanarak veri dictionary'sini oluştur
+      
             var data = new Dictionary<string, object>();
 
             foreach (var columnValue in request.ColumnValues)
@@ -702,9 +702,11 @@ namespace TableManagement.Application.Services
                 throw new ArgumentException("Geçerli column bilgisi bulunamadı.");
             }
 
-            var whereClause = $"RowIdentifier = {request.RowIdentifier}";
+            var whereClause = $"Id = {request.RowId}";
             return await _dataDefinitionService.UpdateDataInUserTableAsync(table.TableName, data, whereClause, userId);
         }
+
+
 
         // Backward compatibility için ID bazlı veri ekleme
         public async Task<bool> AddTableDataByIdAsync(AddTableDataByIdRequest request, int userId)

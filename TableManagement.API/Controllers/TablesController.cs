@@ -641,8 +641,8 @@ namespace TableManagement.API.Controllers
         /// <summary>
         /// Tablo verilerini günceller (Column Name bazlı - YENİ)
         /// </summary>
-        [HttpPut("{id}/data/{rowIdentifier}")]
-        public async Task<IActionResult> UpdateTableData(int id, int rowIdentifier, [FromBody] Dictionary<string, string> columnValues)
+        [HttpPut("{id}/data/{rowId}")]
+        public async Task<IActionResult> UpdateTableData(int id, int rowId, [FromBody] Dictionary<string, string> columnValues)
         {
             if (!ModelState.IsValid)
             {
@@ -652,14 +652,13 @@ namespace TableManagement.API.Controllers
             var request = new UpdateTableDataRequest
             {
                 TableId = id,
-                RowIdentifier = rowIdentifier,
+                RowId = rowId,
                 ColumnValues = columnValues
             };
 
             try
             {
                 var userId = GetCurrentUserId();
-                _logger.LogInformation("Updating data in table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, userId);
 
                 var result = await _tableService.UpdateTableDataAsync(request, userId);
 
@@ -672,7 +671,7 @@ namespace TableManagement.API.Controllers
                     });
                 }
 
-                _logger.LogInformation("Data updated successfully in table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, userId);
+       
 
                 return Ok(new
                 {
@@ -682,7 +681,7 @@ namespace TableManagement.API.Controllers
             }
             catch (ArgumentException ex)
             {
-                _logger.LogWarning("Table {TableId} or row {RowIdentifier} not found for user {UserId}: {Message}", id, rowIdentifier, GetCurrentUserId(), ex.Message);
+ 
                 return NotFound(new
                 {
                     success = false,
@@ -691,7 +690,7 @@ namespace TableManagement.API.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error updating data in table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, GetCurrentUserId());
+ 
                 return StatusCode(500, new
                 {
                     success = false,

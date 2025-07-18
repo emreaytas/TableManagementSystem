@@ -13,7 +13,7 @@ namespace TableManagement.Application.DTOs.Requests
         public int TableId { get; set; }
 
         [Required]
-        public int RowIdentifier { get; set; }
+        public int RowId { get; set; }
 
         [Required]
         public Dictionary<string, string> ColumnValues { get; set; } = new Dictionary<string, string>();

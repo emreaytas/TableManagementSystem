@@ -235,208 +235,7 @@ namespace TableManagement.API.Controllers
             }
         }
 
-        /// <summary>
-        /// Belirtilen tablonun verilerini getirir
-        /// </summary>
-        [HttpGet("{id}/data")]
-        public async Task<IActionResult> GetTableData(int id)
-        {
-            try
-            {
-                var userId = GetCurrentUserId();
-                _logger.LogInformation("Getting data for table {TableId} for user {UserId}", id, userId);
 
-                var data = await _tableService.GetTableDataAsync(id, userId);
-
-                return Ok(new
-                {
-                    success = true,
-                    data = data,
-                    message = "Tablo verileri başarıyla getirildi."
-                });
-            }
-            catch (ArgumentException ex)
-            {
-                _logger.LogWarning("Table {TableId} not found for user {UserId}: {Message}", id, GetCurrentUserId(), ex.Message);
-                return NotFound(new
-                {
-                    success = false,
-                    message = ex.Message
-                });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error getting data for table {TableId} for user {UserId}", id, GetCurrentUserId());
-                return StatusCode(500, new
-                {
-                    success = false,
-                    message = "Tablo verileri getirilirken bir hata oluştu."
-                });
-            }
-        }
-
-        /// <summary>
-        /// Tabloya yeni veri ekler
-        /// </summary>
-        [HttpPost("{id}/data")]
-        public async Task<IActionResult> AddTableData(int id, [FromBody] AddTableDataRequest request)
-        {
-            if (!ModelState.IsValid)
-            {
-                return BadRequest(ModelState);
-            }
-
-            // Ensure the table ID in the request matches the route parameter
-            request.TableId = id;
-
-            try
-            {
-                var userId = GetCurrentUserId();
-                _logger.LogInformation("Adding data to table {TableId} for user {UserId}", id, userId);
-
-                var result = await _tableService.AddTableDataAsync(request, userId);
-
-                if (!result)
-                {
-                    return BadRequest(new
-                    {
-                        success = false,
-                        message = "Veri eklenirken bir hata oluştu."
-                    });
-                }
-
-                _logger.LogInformation("Data added successfully to table {TableId} for user {UserId}", id, userId);
-
-                return Ok(new
-                {
-                    success = true,
-                    message = "Veri başarıyla eklendi."
-                });
-            }
-            catch (ArgumentException ex)
-            {
-                _logger.LogWarning("Table {TableId} not found for user {UserId}: {Message}", id, GetCurrentUserId(), ex.Message);
-                return NotFound(new
-                {
-                    success = false,
-                    message = ex.Message
-                });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error adding data to table {TableId} for user {UserId}", id, GetCurrentUserId());
-                return StatusCode(500, new
-                {
-                    success = false,
-                    message = "Veri eklenirken bir hata oluştu."
-                });
-            }
-        }
-
-        /// <summary>
-        /// Tablo verilerini günceller
-        /// </summary>
-        [HttpPut("{id}/data/{rowIdentifier}")]
-        public async Task<IActionResult> UpdateTableData(int id, int rowIdentifier, [FromBody] Dictionary<int, string> values)
-        {
-            if (!ModelState.IsValid)
-            {
-                return BadRequest(ModelState);
-            }
-
-            try
-            {
-                var userId = GetCurrentUserId();
-                _logger.LogInformation("Updating data in table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, userId);
-
-                var result = await _tableService.UpdateTableDataAsync(id, rowIdentifier, values, userId);
-
-                if (!result)
-                {
-                    return BadRequest(new
-                    {
-                        success = false,
-                        message = "Veri güncellenirken bir hata oluştu."
-                    });
-                }
-
-                _logger.LogInformation("Data updated successfully in table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, userId);
-
-                return Ok(new
-                {
-                    success = true,
-                    message = "Veri başarıyla güncellendi."
-                });
-            }
-            catch (ArgumentException ex)
-            {
-                _logger.LogWarning("Table {TableId} not found for user {UserId}: {Message}", id, GetCurrentUserId(), ex.Message);
-                return NotFound(new
-                {
-                    success = false,
-                    message = ex.Message
-                });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error updating data in table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, GetCurrentUserId());
-                return StatusCode(500, new
-                {
-                    success = false,
-                    message = "Veri güncellenirken bir hata oluştu."
-                });
-            }
-        }
-
-        /// <summary>
-        /// Tablo verilerini siler
-        /// </summary>
-        [HttpDelete("{id}/data/{rowIdentifier}")]
-        public async Task<IActionResult> DeleteTableData(int id, int rowIdentifier)
-        {
-            try
-            {
-                var userId = GetCurrentUserId();
-                _logger.LogInformation("Deleting data from table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, userId);
-
-                var result = await _tableService.DeleteTableDataAsync(id, rowIdentifier, userId);
-
-                if (!result)
-                {
-                    return BadRequest(new
-                    {
-                        success = false,
-                        message = "Veri silinirken bir hata oluştu."
-                    });
-                }
-
-                _logger.LogInformation("Data deleted successfully from table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, userId);
-
-                return Ok(new
-                {
-                    success = true,
-                    message = "Veri başarıyla silindi."
-                });
-            }
-            catch (ArgumentException ex)
-            {
-                _logger.LogWarning("Table {TableId} not found for user {UserId}: {Message}", id, GetCurrentUserId(), ex.Message);
-                return NotFound(new
-                {
-                    success = false,
-                    message = ex.Message
-                });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error deleting data from table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, GetCurrentUserId());
-                return StatusCode(500, new
-                {
-                    success = false,
-                    message = "Veri silinirken bir hata oluştu."
-                });
-            }
-        }
 
         /// <summary>
         /// Kolon günceller
@@ -646,5 +445,385 @@ namespace TableManagement.API.Controllers
                 });
             }
         }
+
+
+        [HttpGet("{id}/data")]
+        public async Task<IActionResult> GetTableData(int id)
+        {
+            try
+            {
+                var userId = GetCurrentUserId();
+                _logger.LogInformation("Getting data for table {TableId} for user {UserId}", id, userId);
+
+                var data = await _tableService.GetTableDataAsync(id, userId);
+
+                return Ok(new
+                {
+                    success = true,
+                    data = data,
+                    message = "Tablo verileri başarıyla getirildi."
+                });
+            }
+            catch (ArgumentException ex)
+            {
+                _logger.LogWarning("Table {TableId} not found for user {UserId}: {Message}", id, GetCurrentUserId(), ex.Message);
+                return NotFound(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting data for table {TableId} for user {UserId}", id, GetCurrentUserId());
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = "Tablo verileri getirilirken bir hata oluştu."
+                });
+            }
+        }
+
+  
+
+   
+    
+
+
+  
+
+
+
+
+
+        [HttpDelete("{id}/data/{rowIdentifier}")]
+        public async Task<IActionResult> DeleteTableData(int id, int rowIdentifier)
+        {
+            try
+            {
+                var userId = GetCurrentUserId();
+                _logger.LogInformation("Deleting data from table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, userId);
+
+                var result = await _tableService.DeleteTableDataAsync(id, rowIdentifier, userId);
+
+                if (!result)
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = "Veri silinirken bir hata oluştu."
+                    });
+                }
+
+                _logger.LogInformation("Data deleted successfully from table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, userId);
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Veri başarıyla silindi."
+                });
+            }
+            catch (ArgumentException ex)
+            {
+                _logger.LogWarning("Table {TableId} or row {RowIdentifier} not found for user {UserId}: {Message}", id, rowIdentifier, GetCurrentUserId(), ex.Message);
+                return NotFound(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error deleting data from table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, GetCurrentUserId());
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = "Veri silinirken bir hata oluştu."
+                });
+            }
+        }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        [HttpPost("{id}/data")]
+        public async Task<IActionResult> AddTableData(int id, [FromBody] AddTableDataRequest request)
+        {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            // Ensure the table ID in the request matches the route parameter
+            request.TableId = id;
+
+            try
+            {
+                var userId = GetCurrentUserId();
+                _logger.LogInformation("Adding data to table {TableId} for user {UserId}", id, userId);
+
+                var result = await _tableService.AddTableDataAsync(request, userId);
+
+                if (!result)
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = "Veri eklenirken bir hata oluştu."
+                    });
+                }
+
+                _logger.LogInformation("Data added successfully to table {TableId} for user {UserId}", id, userId);
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Veri başarıyla eklendi."
+                });
+            }
+            catch (ArgumentException ex)
+            {
+                _logger.LogWarning("Table {TableId} not found for user {UserId}: {Message}", id, GetCurrentUserId(), ex.Message);
+                return NotFound(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error adding data to table {TableId} for user {UserId}", id, GetCurrentUserId());
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = "Veri eklenirken bir hata oluştu."
+                });
+            }
+        }
+
+        /// <summary>
+        /// Tablo verilerini günceller (Column Name bazlı - YENİ)
+        /// </summary>
+        [HttpPut("{id}/data/{rowIdentifier}")]
+        public async Task<IActionResult> UpdateTableData(int id, int rowIdentifier, [FromBody] Dictionary<string, string> columnValues)
+        {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            var request = new UpdateTableDataRequest
+            {
+                TableId = id,
+                RowIdentifier = rowIdentifier,
+                ColumnValues = columnValues
+            };
+
+            try
+            {
+                var userId = GetCurrentUserId();
+                _logger.LogInformation("Updating data in table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, userId);
+
+                var result = await _tableService.UpdateTableDataAsync(request, userId);
+
+                if (!result)
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = "Veri güncellenirken bir hata oluştu."
+                    });
+                }
+
+                _logger.LogInformation("Data updated successfully in table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, userId);
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Veri başarıyla güncellendi."
+                });
+            }
+            catch (ArgumentException ex)
+            {
+                _logger.LogWarning("Table {TableId} or row {RowIdentifier} not found for user {UserId}: {Message}", id, rowIdentifier, GetCurrentUserId(), ex.Message);
+                return NotFound(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error updating data in table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, GetCurrentUserId());
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = "Veri güncellenirken bir hata oluştu."
+                });
+            }
+        }
+
+        /// <summary>
+        /// Tabloya yeni veri ekler (Column ID bazlı - ESKİ, backward compatibility)
+        /// </summary>
+        [HttpPost("{id}/data-by-id")]
+        public async Task<IActionResult> AddTableDataById(int id, [FromBody] AddTableDataByIdRequest request)
+        {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            request.TableId = id;
+
+            try
+            {
+                var userId = GetCurrentUserId();
+                _logger.LogInformation("Adding data by ID to table {TableId} for user {UserId}", id, userId);
+
+                var result = await _tableService.AddTableDataByIdAsync(request, userId);
+
+                if (!result)
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = "Veri eklenirken bir hata oluştu."
+                    });
+                }
+
+                _logger.LogInformation("Data added successfully by ID to table {TableId} for user {UserId}", id, userId);
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Veri başarıyla eklendi."
+                });
+            }
+            catch (ArgumentException ex)
+            {
+                _logger.LogWarning("Table {TableId} not found for user {UserId}: {Message}", id, GetCurrentUserId(), ex.Message);
+                return NotFound(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error adding data by ID to table {TableId} for user {UserId}", id, GetCurrentUserId());
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = "Veri eklenirken bir hata oluştu."
+                });
+            }
+        }
+
+        /// <summary>
+        /// Tablo verilerini günceller (Column ID bazlı - ESKİ, backward compatibility)
+        /// </summary>
+        [HttpPut("{id}/data-by-id/{rowIdentifier}")]
+        public async Task<IActionResult> UpdateTableDataById(int id, int rowIdentifier, [FromBody] Dictionary<int, string> values)
+        {
+            if (!ModelState.IsValid)
+            {
+                return BadRequest(ModelState);
+            }
+
+            try
+            {
+                var userId = GetCurrentUserId();
+                _logger.LogInformation("Updating data by ID in table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, userId);
+
+                var result = await _tableService.UpdateTableDataByIdAsync(id, rowIdentifier, values, userId);
+
+                if (!result)
+                {
+                    return BadRequest(new
+                    {
+                        success = false,
+                        message = "Veri güncellenirken bir hata oluştu."
+                    });
+                }
+
+                _logger.LogInformation("Data updated successfully by ID in table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, userId);
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Veri başarıyla güncellendi."
+                });
+            }
+            catch (ArgumentException ex)
+            {
+                _logger.LogWarning("Table {TableId} or row {RowIdentifier} not found for user {UserId}: {Message}", id, rowIdentifier, GetCurrentUserId(), ex.Message);
+                return NotFound(new
+                {
+                    success = false,
+                    message = ex.Message
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error updating data by ID in table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, GetCurrentUserId());
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = "Veri güncellenirken bir hata oluştu."
+                });
+            }
+        }
+
+
     }
 }

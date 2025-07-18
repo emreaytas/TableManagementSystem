@@ -89,39 +89,7 @@ namespace TableManagement.API.Controllers
             }
         }
 
-        /// <summary>
-        /// Tablodaki veriyi günceller (gerçek veritabanında)
-        /// </summary>
-        [HttpPut("{tableId}/rows/{rowIdentifier}")]
-        public async Task<IActionResult> UpdateTableData(int tableId, int rowIdentifier, [FromBody] Dictionary<int, string> values)
-        {
-            if (!ModelState.IsValid)
-            {
-                return BadRequest(ModelState);
-            }
-
-            try
-            {
-                var userId = GetCurrentUserId();
-                _logger.LogInformation("Updating data in table {TableId} row {RowId} for user {UserId}", tableId, rowIdentifier, userId);
-
-                var result = await _tableService.UpdateTableDataAsync(tableId, rowIdentifier, values, userId);
-
-                if (!result)
-                {
-                    return BadRequest(new { message = "Veri güncellenirken bir hata oluştu." });
-                }
-
-                _logger.LogInformation("Data updated successfully in table {TableId} row {RowId} for user {UserId}", tableId, rowIdentifier, userId);
-                return Ok(new { message = "Veri başarıyla güncellendi." });
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error updating data in table {TableId} row {RowId} for user {UserId}", tableId, rowIdentifier, GetCurrentUserId());
-                return StatusCode(500, new { message = "Veri güncellenirken bir hata oluştu." });
-            }
-        }
-
+       
         /// <summary>
         /// Tablodan veri siler (gerçek veritabanından)
         /// </summary>

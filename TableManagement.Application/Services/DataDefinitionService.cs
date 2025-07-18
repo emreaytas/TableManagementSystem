@@ -133,10 +133,47 @@ namespace TableManagement.Application.Services
                 var secureTableName = GenerateSecureTableName(tableName, userId);
                 var result = new List<Dictionary<string, object>>();
 
+                _logger.LogInformation("Attempting to select data from table: {SecureTableName} for user: {UserId}", secureTableName, userId);
+
                 using var connection = new SqlConnection(_connectionString);
                 await connection.OpenAsync();
 
-                var selectQuery = $"SELECT * FROM [{secureTableName}] ORDER BY RowIdentifier";
+                // Önce tablonun var olup olmadığını kontrol edin
+                var tableExistsQuery = @"
+            SELECT COUNT(*) 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_NAME = @tableName AND TABLE_SCHEMA = 'dbo'";
+
+                using var checkCommand = new SqlCommand(tableExistsQuery, connection);
+                checkCommand.Parameters.AddWithValue("@tableName", secureTableName);
+                var tableExists = (int)await checkCommand.ExecuteScalarAsync() > 0;
+
+                if (!tableExists)
+                {
+                    _logger.LogWarning("Table {SecureTableName} does not exist for user {UserId}", secureTableName, userId);
+                    return result;
+                }
+
+                // Veri çekme sorgusu
+                var selectQuery = $"SELECT * FROM [{secureTableName}]";
+
+                // Eğer RowIdentifier sütunu varsa ORDER BY ekleyin
+                var columnCheckQuery = @"
+            SELECT COUNT(*) 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_NAME = @tableName AND COLUMN_NAME = 'RowIdentifier' AND TABLE_SCHEMA = 'dbo'";
+
+                using var columnCommand = new SqlCommand(columnCheckQuery, connection);
+                columnCommand.Parameters.AddWithValue("@tableName", secureTableName);
+                var hasRowIdentifier = (int)await columnCommand.ExecuteScalarAsync() > 0;
+
+                if (hasRowIdentifier)
+                {
+                    selectQuery += " ORDER BY RowIdentifier";
+                }
+
+                _logger.LogInformation("Executing query: {Query}", selectQuery);
+
                 using var command = new SqlCommand(selectQuery, connection);
                 using var reader = await command.ExecuteReaderAsync();
 
@@ -145,16 +182,20 @@ namespace TableManagement.Application.Services
                     var row = new Dictionary<string, object>();
                     for (int i = 0; i < reader.FieldCount; i++)
                     {
-                        row[reader.GetName(i)] = reader.GetValue(i);
+                        var fieldName = reader.GetName(i);
+                        var fieldValue = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                        row[fieldName] = fieldValue;
                     }
                     result.Add(row);
                 }
 
+                _logger.LogInformation("Retrieved {RowCount} rows from table {SecureTableName}", result.Count, secureTableName);
                 return result;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error selecting data from table {TableName} for user {UserId}", tableName, userId);
+                // Hata durumunda boş liste döndür, exception fırlatma
                 return new List<Dictionary<string, object>>();
             }
         }

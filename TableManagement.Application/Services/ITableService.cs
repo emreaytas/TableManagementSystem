@@ -12,11 +12,19 @@ namespace TableManagement.Application.Services
         Task<TableResponse> GetTableByIdAsync(int tableId, int userId);
         Task<bool> DeleteTableAsync(int tableId, int userId);
 
-        // Table data methods
+        // Table data methods - YENİ column name bazlı
         Task<TableDataResponse> GetTableDataAsync(int tableId, int userId);
         Task<bool> AddTableDataAsync(AddTableDataRequest request, int userId);
-        Task<bool> UpdateTableDataAsync(int tableId, int rowIdentifier, Dictionary<int, string> values, int userId);
+
+        // YENİ: Column name bazlı güncelleme
+        Task<bool> UpdateTableDataAsync(UpdateTableDataRequest request, int userId);
+
+        // Silme metodu (aynı kaldı)
         Task<bool> DeleteTableDataAsync(int tableId, int rowIdentifier, int userId);
+
+        // Backward compatibility için ID bazlı metodlar
+        Task<bool> AddTableDataByIdAsync(AddTableDataByIdRequest request, int userId);
+        Task<bool> UpdateTableDataByIdAsync(int tableId, int rowIdentifier, Dictionary<int, string> values, int userId);
 
         // Column update methods
         Task<ColumnUpdateResult> UpdateColumnAsync(int tableId, UpdateColumnRequest request, int userId);
@@ -27,7 +35,6 @@ namespace TableManagement.Application.Services
         Task<TableUpdateResult> UpdateTableAsync(int tableId, UpdateTableRequest request, int userId);
         Task<TableCreateResult> CreateTableWithValidationAsync(CreateTableRequest request, int userId);
     }
-
     // Result classes for the interface
     public class ColumnUpdateResult
     {

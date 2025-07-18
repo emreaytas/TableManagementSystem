@@ -141,69 +141,52 @@ namespace TableManagement.Application.Services
 
         public async Task<TableDataResponse> GetTableDataAsync(int tableId, int userId)
         {
-            var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(tableId, userId);
-            if (table == null)
-                throw new ArgumentException("Tablo bulunamadı.");
-
-            var data = await _dataDefinitionService.SelectDataFromUserTableAsync(table.TableName, userId);
-
-            return new TableDataResponse
+            try
             {
-                TableId = tableId,
-                TableName = table.TableName,
-                Columns = _mapper.Map<List<ColumnResponse>>(table.Columns),
-                Data = data
-            };
-        }
-
-        public async Task<bool> AddTableDataAsync(AddTableDataRequest request, int userId)
-        {
-            var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(request.TableId, userId);
-            if (table == null)
-                throw new ArgumentException("Tablo bulunamadı.");
-
-            // Convert column values to proper format
-            var data = new Dictionary<string, object>();
-            foreach (var column in table.Columns)
-            {
-                if (request.ColumnValues.ContainsKey(column.Id))
+                // Tablonun mevcut olup olmadığını kontrol et
+                var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(tableId, userId);
+                if (table == null)
                 {
-                    data[column.ColumnName] = request.ColumnValues[column.Id];
+                    _logger.LogWarning("Table with ID {TableId} not found for user {UserId}", tableId, userId);
+                    throw new ArgumentException("Tablo bulunamadı.");
                 }
-            }
 
-            return await _dataDefinitionService.InsertDataToUserTableAsync(table.TableName, data, userId);
-        }
+                _logger.LogInformation("Found table: {TableName} (ID: {TableId}) for user {UserId}", table.TableName, tableId, userId);
 
-        public async Task<bool> UpdateTableDataAsync(int tableId, int rowIdentifier, Dictionary<int, string> values, int userId)
-        {
-            var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(tableId, userId);
-            if (table == null)
-                throw new ArgumentException("Tablo bulunamadı.");
+                // Tablodan verileri çek
+                var data = await _dataDefinitionService.SelectDataFromUserTableAsync(table.TableName, userId);
 
-            // Convert column values to proper format
-            var data = new Dictionary<string, object>();
-            foreach (var column in table.Columns)
-            {
-                if (values.ContainsKey(column.Id))
+                _logger.LogInformation("Retrieved {DataCount} rows from table {TableName}", data?.Count ?? 0, table.TableName);
+
+                // Columns'u sırala ve map et
+                var orderedColumns = table.Columns?.OrderBy(c => c.DisplayOrder)?.ToList() ?? new List<CustomColumn>();
+
+                // Response'u oluştur
+                var response = new TableDataResponse
                 {
-                    data[column.ColumnName] = values[column.Id];
-                }
+                    TableId = tableId,
+                    TableName = table.TableName,
+                    Columns = _mapper.Map<List<ColumnResponse>>(orderedColumns),
+                    Data = data ?? new List<Dictionary<string, object>>()
+                };
+
+                return response;
             }
-
-            var whereClause = $"RowIdentifier = {rowIdentifier}";
-            return await _dataDefinitionService.UpdateDataInUserTableAsync(table.TableName, data, whereClause, userId);
+            catch (ArgumentException)
+            {
+                // Zaten loglananları tekrar loglamayın
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting table data for table {TableId} and user {UserId}", tableId, userId);
+                throw new ApplicationException("Tablo verileri getirilirken bir hata oluştu.", ex);
+            }
         }
 
-        public async Task<bool> DeleteTableDataAsync(int tableId, int rowIdentifier, int userId)
-        {
-            var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(tableId, userId);
-            if (table == null)
-                throw new ArgumentException("Tablo bulunamadı.");
+   
 
-            var whereClause = $"RowIdentifier = {rowIdentifier}";
-            return await _dataDefinitionService.DeleteDataFromUserTableAsync(table.TableName, whereClause, userId);
-        }
+     
 
         // New methods for enhanced update system
         public async Task<ColumnUpdateResult> UpdateColumnAsync(int tableId, UpdateColumnRequest request, int userId)
@@ -598,5 +581,184 @@ namespace TableManagement.Application.Services
 
             return (executedQueries, totalAffectedRows);
         }
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        public async Task<bool> AddTableDataAsync(AddTableDataRequest request, int userId)
+        {
+            var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(request.TableId, userId);
+            if (table == null)
+                throw new ArgumentException("Tablo bulunamadı.");
+
+            // Column name'leri kullanarak veri dictionary'sini oluştur
+            var data = new Dictionary<string, object>();
+
+            foreach (var columnValue in request.ColumnValues)
+            {
+                // Column name'in tabloda mevcut olup olmadığını kontrol et
+                var column = table.Columns.FirstOrDefault(c =>
+                    c.ColumnName.Equals(columnValue.Key, StringComparison.OrdinalIgnoreCase));
+
+                if (column != null)
+                {
+                    data[column.ColumnName] = columnValue.Value;
+                }
+                else
+                {
+                    _logger.LogWarning("Column {ColumnName} not found in table {TableId}", columnValue.Key, request.TableId);
+                }
+            }
+
+            if (data.Count == 0)
+            {
+                throw new ArgumentException("Geçerli column bilgisi bulunamadı.");
+            }
+
+            return await _dataDefinitionService.InsertDataToUserTableAsync(table.TableName, data, userId);
+        }
+
+        // YENİ: Column name bazlı güncelleme metodu
+        public async Task<bool> UpdateTableDataAsync(UpdateTableDataRequest request, int userId)
+        {
+            var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(request.TableId, userId);
+            if (table == null)
+                throw new ArgumentException("Tablo bulunamadı.");
+
+            // Column name'leri kullanarak veri dictionary'sini oluştur
+            var data = new Dictionary<string, object>();
+
+            foreach (var columnValue in request.ColumnValues)
+            {
+                // Column name'in tabloda mevcut olup olmadığını kontrol et
+                var column = table.Columns.FirstOrDefault(c =>
+                    c.ColumnName.Equals(columnValue.Key, StringComparison.OrdinalIgnoreCase));
+
+                if (column != null)
+                {
+                    data[column.ColumnName] = columnValue.Value;
+                }
+                else
+                {
+                    _logger.LogWarning("Column {ColumnName} not found in table {TableId}", columnValue.Key, request.TableId);
+                }
+            }
+
+            if (data.Count == 0)
+            {
+                throw new ArgumentException("Geçerli column bilgisi bulunamadı.");
+            }
+
+            var whereClause = $"RowIdentifier = {request.RowIdentifier}";
+            return await _dataDefinitionService.UpdateDataInUserTableAsync(table.TableName, data, whereClause, userId);
+        }
+
+        // Backward compatibility için ID bazlı veri ekleme
+        public async Task<bool> AddTableDataByIdAsync(AddTableDataByIdRequest request, int userId)
+        {
+            var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(request.TableId, userId);
+            if (table == null)
+                throw new ArgumentException("Tablo bulunamadı.");
+
+            // Convert column values to proper format
+            var data = new Dictionary<string, object>();
+            foreach (var column in table.Columns)
+            {
+                if (request.ColumnValues.ContainsKey(column.Id))
+                {
+                    data[column.ColumnName] = request.ColumnValues[column.Id];
+                }
+            }
+
+            return await _dataDefinitionService.InsertDataToUserTableAsync(table.TableName, data, userId);
+        }
+
+        // Backward compatibility için ID bazlı güncelleme metodu
+        public async Task<bool> UpdateTableDataByIdAsync(int tableId, int rowIdentifier, Dictionary<int, string> values, int userId)
+        {
+            var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(tableId, userId);
+            if (table == null)
+                throw new ArgumentException("Tablo bulunamadı.");
+
+            // Convert column values to proper format
+            var data = new Dictionary<string, object>();
+            foreach (var column in table.Columns)
+            {
+                if (values.ContainsKey(column.Id))
+                {
+                    data[column.ColumnName] = values[column.Id];
+                }
+            }
+
+            var whereClause = $"RowIdentifier = {rowIdentifier}";
+            return await _dataDefinitionService.UpdateDataInUserTableAsync(table.TableName, data, whereClause, userId);
+        }
+
+        // Silme metodu (değişiklik yok)
+        public async Task<bool> DeleteTableDataAsync(int tableId, int rowIdentifier, int userId)
+        {
+            var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(tableId, userId);
+            if (table == null)
+                throw new ArgumentException("Tablo bulunamadı.");
+
+            var whereClause = $"RowIdentifier = {rowIdentifier}";
+            return await _dataDefinitionService.DeleteDataFromUserTableAsync(table.TableName, whereClause, userId);
+        }
+
+
+
     }
 }

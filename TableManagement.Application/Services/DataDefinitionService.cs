@@ -302,6 +302,8 @@ namespace TableManagement.Application.Services
             }
         }
 
+        // DataDefinitionService.cs içindeki GetAllUserTablesAsync metodunu değiştirin:
+
         public async Task<List<string>> GetAllUserTablesAsync(int userId)
         {
             try
@@ -309,11 +311,12 @@ namespace TableManagement.Application.Services
                 using var connection = new SqlConnection(_connectionString);
                 await connection.OpenAsync();
 
+                // SQL parametresi düzeltildi
                 var query = @"
             SELECT TABLE_NAME 
             FROM INFORMATION_SCHEMA.TABLES 
             WHERE TABLE_SCHEMA = 'dbo' 
-            AND TABLE_NAME LIKE 'Table_' + @userId + '_%'
+              AND TABLE_NAME LIKE CONCAT('Table_', @userId, '_%')
             ORDER BY TABLE_NAME";
 
                 using var command = new SqlCommand(query, connection);

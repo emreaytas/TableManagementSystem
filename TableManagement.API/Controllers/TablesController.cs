@@ -4,6 +4,9 @@ using System.Security.Claims;
 using TableManagement.Application.DTOs.Requests;
 using TableManagement.Application.Services;
 using TableManagement.Core.DTOs.Requests;
+using TableManagement.Core.Entities;
+using TableManagement.Core.Enums;
+using TableManagement.Core.Interfaces;
 
 namespace TableManagement.API.Controllers
 {
@@ -15,15 +18,16 @@ namespace TableManagement.API.Controllers
         private readonly ITableService _tableService;
         private readonly IDataDefinitionService _dataDefinitionService;
         private readonly ILogger<TablesController> _logger;
-
+        private readonly IUnitOfWork _unitOfWork;
         public TablesController(
             ITableService tableService,
             IDataDefinitionService dataDefinitionService,
-            ILogger<TablesController> logger)
+            ILogger<TablesController> logger,IUnitOfWork unitOfWork)
         {
             _tableService = tableService;
             _dataDefinitionService = dataDefinitionService;
             _logger = logger;
+            _unitOfWork = unitOfWork;   
         }
 
         private int GetCurrentUserId()
@@ -31,7 +35,215 @@ namespace TableManagement.API.Controllers
             return int.Parse(User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "0");
         }
 
-      
+
+        // TablesController.cs içine eklenecek metodlar
+
+        /// <summary>
+        /// Fiziksel tablo durumunu debug eder
+        /// </summary>
+        [HttpGet("{id}/debug-physical-table")]
+        public async Task<IActionResult> DebugPhysicalTable(int id)
+        {
+            try
+            {
+                var userId = GetCurrentUserId();
+                _logger.LogInformation("=== DEBUG PHYSICAL TABLE FOR ID: {TableId} ===", id);
+
+                // 1. CustomTables'tan bilgiyi al
+                var customTable = await _unitOfWork.CustomTables.GetUserTableByIdAsync(id, userId);
+
+                // 2. Fiziksel tabloları al
+                var allUserTables = await _dataDefinitionService.GetAllUserTablesAsync(userId);
+                var allSystemTables = await _dataDefinitionService.GetAllTablesDebugAsync();
+
+                // 3. Olası tablo isimlerini oluştur
+                var possibleNames = new List<string>();
+                if (customTable != null)
+                {
+                    possibleNames.Add(_dataDefinitionService.GenerateSecureTableName(customTable.TableName, userId));
+                    possibleNames.Add($"Table_{userId}_{customTable.TableName}");
+                    possibleNames.Add($"Table_{userId}_{customTable.TableName.Replace(" ", "_")}");
+
+                    // Türkçe karakterler normalize
+                    var normalized = customTable.TableName
+                        .Replace("ş", "s").Replace("Ş", "S")
+                        .Replace("ç", "c").Replace("Ç", "C")
+                        .Replace("ı", "i").Replace("İ", "I")
+                        .Replace("ğ", "g").Replace("Ğ", "G")
+                        .Replace("ü", "u").Replace("Ü", "U")
+                        .Replace("ö", "o").Replace("Ö", "O")
+                        .Replace(" ", "_");
+                    possibleNames.Add($"Table_{userId}_{normalized}");
+                }
+
+                return Ok(new
+                {
+                    tableId = id,
+                    userId = userId,
+                    customTableInfo = customTable != null ? new
+                    {
+                        id = customTable.Id,
+                        tableName = customTable.TableName,
+                        description = customTable.Description,
+                        createdAt = customTable.CreatedAt,
+                        columnCount = customTable.Columns?.Count ?? 0,
+                        columns = customTable.Columns?.Select(c => new {
+                            c.Id,
+                            c.ColumnName,
+                            c.DataType,
+                            c.IsRequired,
+                            c.DisplayOrder
+                        }).ToList()
+                    } : null,
+                    possiblePhysicalNames = possibleNames,
+                    actualUserTables = allUserTables,
+                    totalSystemTables = allSystemTables.Count,
+                    firstFewSystemTables = allSystemTables.Take(20).ToList(),
+                    userTablesContainingUserId = allUserTables.Where(t => t.Contains($"_{userId}_")).ToList(),
+                    anyTableContainingTest = allSystemTables.Where(t =>
+                        t.ToLower().Contains("test") ||
+                        t.ToLower().Contains("tablosu") ||
+                        t.Contains($"Table_{userId}")).ToList()
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in debug endpoint for table {TableId}", id);
+                return StatusCode(500, new { error = ex.Message, stackTrace = ex.StackTrace });
+            }
+        }
+
+        /// <summary>
+        /// Fiziksel tabloyu yeniden oluşturur
+        /// </summary>
+        [HttpPost("{id}/recreate-physical-table")]
+        public async Task<IActionResult> RecreatePhysicalTable(int id)
+        {
+            try
+            {
+                var userId = GetCurrentUserId();
+                _logger.LogInformation("Attempting to recreate physical table for CustomTable ID: {TableId}", id);
+
+                var customTable = await _unitOfWork.CustomTables.GetUserTableWithColumnsAsync(id, userId);
+
+                if (customTable == null)
+                {
+                    return NotFound(new
+                    {
+                        error = "CustomTable bulunamadı",
+                        tableId = id,
+                        userId = userId
+                    });
+                }
+
+                // Fiziksel tablo adını oluştur
+                var physicalTableName = _dataDefinitionService.GenerateSecureTableName(customTable.TableName, userId);
+                _logger.LogInformation("Generated physical table name: {PhysicalTableName}", physicalTableName);
+
+                // Önce var mı kontrol et
+                var exists = await _dataDefinitionService.TableExistsAsync(physicalTableName);
+                if (exists)
+                {
+                    return BadRequest(new
+                    {
+                        error = $"Fiziksel tablo zaten var: {physicalTableName}",
+                        physicalTableName = physicalTableName,
+                        suggestion = "Önce tabloyu silin veya farklı bir isim kullanın"
+                    });
+                }
+
+                // Kolonları kontrol et
+                if (customTable.Columns == null || !customTable.Columns.Any())
+                {
+                    return BadRequest(new
+                    {
+                        error = "Tablo kolonları bulunamadı",
+                        tableId = id,
+                        tableName = customTable.TableName
+                    });
+                }
+
+                _logger.LogInformation("Creating physical table with {ColumnCount} columns", customTable.Columns.Count);
+
+                // Mevcut CreateUserTableAsync metodunu kullan
+                var result = await _dataDefinitionService.CreateUserTableAsync(
+                    customTable.TableName,
+                    customTable.Columns.ToList(),
+                    userId);
+
+                if (result)
+                {
+                    _logger.LogInformation("Physical table created successfully: {PhysicalTableName}", physicalTableName);
+                }
+                else
+                {
+                    _logger.LogError("Failed to create physical table: {PhysicalTableName}", physicalTableName);
+                }
+
+                return Ok(new
+                {
+                    success = result,
+                    physicalTableName = physicalTableName,
+                    customTableId = id,
+                    customTableName = customTable.TableName,
+                    columnCount = customTable.Columns.Count,
+                    columns = customTable.Columns.Select(c => new {
+                        c.ColumnName,
+                        c.DataType,
+                        c.IsRequired,
+                        c.DefaultValue
+                    }).ToList(),
+                    message = result ?
+                        "Fiziksel tablo başarıyla oluşturuldu. Şimdi güncelleme işlemini deneyebilirsiniz." :
+                        "Fiziksel tablo oluşturulamadı. Loglara bakın."
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error recreating physical table for {TableId}", id);
+                return StatusCode(500, new
+                {
+                    error = ex.Message,
+                    stackTrace = ex.StackTrace,
+                    tableId = id
+                });
+            }
+        }
+
+        /// <summary>
+        /// Fiziksel tabloyu siler (temizlik için)
+        /// </summary>
+        [HttpDelete("{id}/delete-physical-table")]
+        public async Task<IActionResult> DeletePhysicalTable(int id)
+        {
+            try
+            {
+                var userId = GetCurrentUserId();
+                var customTable = await _unitOfWork.CustomTables.GetUserTableByIdAsync(id, userId);
+
+                if (customTable == null)
+                {
+                    return NotFound("CustomTable bulunamadı");
+                }
+
+                // Fiziksel tabloyu sil (DropUserTableAsync kullan)
+                var result = await _dataDefinitionService.DropUserTableAsync(customTable.TableName, userId);
+
+                return Ok(new
+                {
+                    success = result,
+                    message = result ? "Fiziksel tablo silindi" : "Fiziksel tablo silinemedi",
+                    tableName = customTable.TableName
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error deleting physical table for {TableId}", id);
+                return StatusCode(500, new { error = ex.Message });
+            }
+        }
+
+
         [HttpPost("CreateTable")]
         public async Task<IActionResult> CreateTable([FromBody] CreateTableRequest request)
         {

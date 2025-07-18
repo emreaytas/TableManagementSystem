@@ -484,27 +484,16 @@ namespace TableManagement.API.Controllers
             }
         }
 
-  
-
-   
-    
-
-
-  
-
-
-
-
-
-        [HttpDelete("{id}/data/{rowIdentifier}")]
-        public async Task<IActionResult> DeleteTableData(int id, int rowIdentifier)
+ 
+        [HttpDelete("{id}/data/{rowId}")]
+        public async Task<IActionResult> DeleteTableData(int id, int rowId)
         {
             try
             {
                 var userId = GetCurrentUserId();
-                _logger.LogInformation("Deleting data from table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, userId);
+   
 
-                var result = await _tableService.DeleteTableDataAsync(id, rowIdentifier, userId);
+                var result = await _tableService.DeleteTableDataAsync(id, rowId, userId);
 
                 if (!result)
                 {
@@ -515,7 +504,6 @@ namespace TableManagement.API.Controllers
                     });
                 }
 
-                _logger.LogInformation("Data deleted successfully from table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, userId);
 
                 return Ok(new
                 {
@@ -525,7 +513,7 @@ namespace TableManagement.API.Controllers
             }
             catch (ArgumentException ex)
             {
-                _logger.LogWarning("Table {TableId} or row {RowIdentifier} not found for user {UserId}: {Message}", id, rowIdentifier, GetCurrentUserId(), ex.Message);
+        
                 return NotFound(new
                 {
                     success = false,
@@ -534,7 +522,7 @@ namespace TableManagement.API.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error deleting data from table {TableId}, row {RowIdentifier} for user {UserId}", id, rowIdentifier, GetCurrentUserId());
+          
                 return StatusCode(500, new
                 {
                     success = false,

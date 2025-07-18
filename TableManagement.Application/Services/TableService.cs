@@ -747,14 +747,14 @@ namespace TableManagement.Application.Services
             return await _dataDefinitionService.UpdateDataInUserTableAsync(table.TableName, data, whereClause, userId);
         }
 
-        // Silme metodu (değişiklik yok)
+        
         public async Task<bool> DeleteTableDataAsync(int tableId, int rowIdentifier, int userId)
         {
             var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(tableId, userId);
             if (table == null)
                 throw new ArgumentException("Tablo bulunamadı.");
 
-            var whereClause = $"RowIdentifier = {rowIdentifier}";
+            var whereClause = $"Id = {rowIdentifier}";
             return await _dataDefinitionService.DeleteDataFromUserTableAsync(table.TableName, whereClause, userId);
         }
 

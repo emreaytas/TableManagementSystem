@@ -240,8 +240,9 @@ namespace TableManagement.Application.Services
                 var deleteQuery = $"DELETE FROM [{secureTableName}] WHERE {whereClause}";
                 using var command = new SqlCommand(deleteQuery, connection);
                 await command.ExecuteNonQueryAsync();
-
                 return true;
+
+
             }
             catch (Exception ex)
             {

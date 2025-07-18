@@ -408,48 +408,77 @@ namespace TableManagement.Application.Services
             }
         }
 
+
         public async Task<TableUpdateResult> UpdateTableAsync(int tableId, UpdateTableRequest request, int userId)
         {
             var result = new TableUpdateResult();
-
-            using var transaction = await _unitOfWork.BeginTransactionAsync();
+            var executedQueries = new List<string>();
+            var totalAffectedRows = 0;
 
             try
             {
-                var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(tableId, userId);
+                await _unitOfWork.BeginTransactionAsync();
+
+                var table = await _unitOfWork.CustomTables.GetUserTableWithColumnsAsync(tableId, userId);
                 if (table == null)
                 {
                     result.Message = "Tablo bulunamadı";
                     return result;
                 }
 
-                var executedQueries = new List<string>();
-                var totalAffectedRows = 0;
+                var originalTableName = table.TableName;
+                _logger.LogInformation("Starting table update: ID={TableId}, Original={OriginalName}, New={NewName}",
+                    tableId, originalTableName, request.TableName);
 
-                // Create backup if needed
-                var hasStructuralChanges = await HasStructuralChangesAsync(table, request);
-                if (hasStructuralChanges)
+                // 1. FIND ACTUAL PHYSICAL TABLE
+                var physicalTableName = await FindPhysicalTableNameAsync(originalTableName, userId);
+                if (string.IsNullOrEmpty(physicalTableName))
                 {
-                    var backupResult = await _dataDefinitionService.CreateTableBackupAsync(table.TableName, userId);
-                    result.BackupCreated = backupResult.Success;
-                    if (backupResult.Success)
+                    result.Message = $"Fiziksel tablo bulunamadı. Aradığımız: {originalTableName}";
+                    return result;
+                }
+
+                _logger.LogInformation("Found physical table: {PhysicalTableName}", physicalTableName);
+
+                // 2. RENAME PHYSICAL TABLE IF NAME CHANGED
+                if (originalTableName != request.TableName)
+                {
+                    var newPhysicalTableName = _dataDefinitionService.GenerateSecureTableName(request.TableName, userId);
+
+                    _logger.LogInformation("Renaming physical table: {OldName} -> {NewName}",
+                        physicalTableName, newPhysicalTableName);
+
+                    var renameResult = await _dataDefinitionService.RenamePhysicalTableDirectAsync(
+                        physicalTableName, newPhysicalTableName);
+
+                    if (!renameResult)
                     {
-                        executedQueries.AddRange(backupResult.ExecutedQueries ?? new List<string>());
+                        result.Message = $"Fiziksel tablo yeniden adlandırılamadı: {physicalTableName} -> {newPhysicalTableName}";
+                        return result;
+                    }
+
+                    executedQueries.Add($"Physical table renamed: {physicalTableName} -> {newPhysicalTableName}");
+                    physicalTableName = newPhysicalTableName; // Update reference
+                }
+
+                // 3. UPDATE COLUMN STRUCTURE
+                if (request.Columns != null && request.Columns.Any())
+                {
+                    var columnUpdateResult = await UpdateTableColumnsAsync(table, request.Columns, userId, physicalTableName);
+                    executedQueries.AddRange(columnUpdateResult.ExecutedQueries);
+                    totalAffectedRows += columnUpdateResult.AffectedRows;
+
+                    if (!columnUpdateResult.Success)
+                    {
+                        result.Message = "Kolon güncellemesinde hata: " + columnUpdateResult.Message;
+                        return result;
                     }
                 }
 
-                // Update table metadata
+                // 4. UPDATE METADATA
                 table.TableName = request.TableName;
                 table.Description = request.Description;
                 table.UpdatedAt = DateTime.UtcNow;
-
-                // Handle column changes
-                if (request.Columns != null && request.Columns.Any())
-                {
-                    var columnUpdateResult = await UpdateTableColumnsAsync(table, request.Columns, userId);
-                    executedQueries.AddRange(columnUpdateResult.ExecutedQueries);
-                    totalAffectedRows += columnUpdateResult.AffectedRows;
-                }
 
                 await _unitOfWork.SaveChangesAsync();
                 await _unitOfWork.CommitTransactionAsync();
@@ -471,6 +500,86 @@ namespace TableManagement.Application.Services
 
             return result;
         }
+
+        // Fiziksel tablo adını bulan gelişmiş metod
+        private async Task<string?> FindPhysicalTableNameAsync(string logicalTableName, int userId)
+        {
+            try
+            {
+                _logger.LogInformation("Searching for physical table for logical name: {LogicalTableName}", logicalTableName);
+
+                // 1. Önce tüm kullanıcı tablolarını listele
+                var allUserTables = await _dataDefinitionService.GetAllUserTablesAsync(userId);
+                var allTables = await _dataDefinitionService.GetAllTablesDebugAsync();
+
+                _logger.LogInformation("All user tables: {Tables}", string.Join(", ", allUserTables));
+                _logger.LogInformation("All system tables: {Tables}", string.Join(", ", allTables));
+
+                if (!allUserTables.Any())
+                {
+                    _logger.LogWarning("No tables found for user {UserId}", userId);
+                    return null;
+                }
+
+                // 2. Olası isimleri oluştur
+                var possibleNames = new List<string>
+        {
+            // Standart format
+            _dataDefinitionService.GenerateSecureTableName(logicalTableName, userId),
+            
+            // Space'leri underscore ile değiştir
+            $"Table_{userId}_{logicalTableName.Replace(" ", "_")}",
+            
+            // Türkçe karakterleri düzelt
+            $"Table_{userId}_{logicalTableName.Replace("ş", "s").Replace("ç", "c").Replace("ı", "i").Replace("ğ", "g").Replace("ü", "u").Replace("ö", "o").Replace(" ", "_")}",
+            
+            // Kısaltılmış versiyonlar
+            $"Table_{userId}_{logicalTableName.Split(' ')[0]}",
+        };
+
+                // 3. Exact match ara
+                foreach (var expectedName in possibleNames)
+                {
+                    if (allUserTables.Contains(expectedName, StringComparer.OrdinalIgnoreCase))
+                    {
+                        _logger.LogInformation("Found exact match: {TableName}", expectedName);
+                        return expectedName;
+                    }
+                }
+
+                // 4. Partial match ara
+                foreach (var userTable in allUserTables)
+                {
+                    // Tablo adından logical kısmı çıkar
+                    var logicalPart = userTable.Replace($"Table_{userId}_", "").Replace("_", " ");
+
+                    if (string.Equals(logicalPart, logicalTableName, StringComparison.OrdinalIgnoreCase) ||
+                        logicalTableName.Contains(logicalPart, StringComparison.OrdinalIgnoreCase) ||
+                        logicalPart.Contains(logicalTableName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogInformation("Found partial match: {TableName} (logical: {LogicalPart})", userTable, logicalPart);
+                        return userTable;
+                    }
+                }
+
+                // 5. Son çare: Tek tablo varsa onu al
+                if (allUserTables.Count == 1)
+                {
+                    _logger.LogInformation("Single table found, using: {TableName}", allUserTables[0]);
+                    return allUserTables[0];
+                }
+
+                _logger.LogWarning("No physical table found for logical name: {LogicalTableName}", logicalTableName);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error finding physical table for {LogicalTableName}", logicalTableName);
+                return null;
+            }
+        }
+
+
 
         public async Task<TableCreateResult> CreateTableWithValidationAsync(CreateTableRequest request, int userId)
         {
@@ -519,78 +628,107 @@ namespace TableManagement.Application.Services
             return false;
         }
 
-        private async Task<(List<string> ExecutedQueries, int AffectedRows)> UpdateTableColumnsAsync(CustomTable table, List<UpdateColumnRequest> columnRequests, int userId)
+        private async Task<ColumnUpdateResult> UpdateTableColumnsAsync(CustomTable table, List<UpdateColumnRequest> newColumns, int userId, string physicalTableName)
         {
-            var executedQueries = new List<string>();
-            var totalAffectedRows = 0;
+            var result = new ColumnUpdateResult { Success = true, ExecutedQueries = new List<string>() };
 
-            // Handle column deletions
-            var columnsToDelete = table.Columns.Where(ec => !columnRequests.Any(cr => cr.ColumnId == ec.Id)).ToList();
-            foreach (var columnToDelete in columnsToDelete)
+            try
             {
-                var deleteResult = await _dataDefinitionService.DropColumnAsync(table.TableName, columnToDelete.ColumnName, userId);
-                if (deleteResult.Success)
-                {
-                    await _unitOfWork.Repository<CustomColumn>().DeleteAsync(columnToDelete);
-                    executedQueries.AddRange(deleteResult.ExecutedQueries ?? new List<string>());
-                }
-            }
+                var existingColumns = table.Columns.ToList();
+                _logger.LogInformation("Updating columns for table {TableName}. Existing: {ExistingCount}, New: {NewCount}",
+                    table.TableName, existingColumns.Count, newColumns.Count);
 
-            // Handle new columns
-            var newColumns = columnRequests.Where(cr => cr.ColumnId == null || cr.ColumnId == 0).ToList();
-            foreach (var newColumnRequest in newColumns)
-            {
-                var addResult = await _dataDefinitionService.AddColumnAsync(table.TableName, newColumnRequest, userId);
-                if (addResult.Success)
+                // 1. COLUMN MAPPING - Hangi kolonların silineceği, ekleneceği, güncelleneceği
+                var columnsToDelete = existingColumns.Where(ec =>
+                    !newColumns.Any(nc => nc.ColumnName.Equals(ec.ColumnName, StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
+
+                var columnsToAdd = newColumns.Where(nc =>
+                    !existingColumns.Any(ec => ec.ColumnName.Equals(nc.ColumnName, StringComparison.OrdinalIgnoreCase)))
+                    .ToList();
+
+                var columnsToUpdate = newColumns.Where(nc =>
+                    existingColumns.Any(ec => ec.ColumnName.Equals(nc.ColumnName, StringComparison.OrdinalIgnoreCase) &&
+                    (ec.DataType != nc.DataType || ec.IsRequired != nc.IsRequired || ec.DefaultValue != nc.DefaultValue)))
+                    .ToList();
+
+                _logger.LogInformation("Column changes - Delete: {DeleteCount}, Add: {AddCount}, Update: {UpdateCount}",
+                    columnsToDelete.Count, columnsToAdd.Count, columnsToUpdate.Count);
+
+                // 2. DELETE COLUMNS
+                foreach (var column in columnsToDelete)
                 {
-                    var newColumn = new CustomColumn
+                    _logger.LogInformation("Deleting column: {ColumnName}", column.ColumnName);
+                    var deleteResult = await _dataDefinitionService.DropColumnDirectAsync(physicalTableName, column.ColumnName);
+                    if (deleteResult.Success)
                     {
-                        ColumnName = newColumnRequest.ColumnName,
-                        DataType = newColumnRequest.DataType,
-                        IsRequired = newColumnRequest.IsRequired,
-                        DisplayOrder = newColumnRequest.DisplayOrder,
-                        DefaultValue = newColumnRequest.DefaultValue,
-                        CustomTableId = table.Id
-                    };
-                    await _unitOfWork.Repository<CustomColumn>().AddAsync(newColumn);
-                    executedQueries.AddRange(addResult.ExecutedQueries ?? new List<string>());
+                        result.ExecutedQueries.Add($"Dropped column: {column.ColumnName}");
+                        table.Columns.Remove(column);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Failed to delete column {ColumnName}: {Message}", column.ColumnName, deleteResult.Message);
+                    }
                 }
-            }
 
-            // Handle column modifications
-            var modifiedColumns = columnRequests.Where(cr => cr.ColumnId.HasValue && cr.ColumnId > 0).ToList();
-            foreach (var modifiedColumnRequest in modifiedColumns)
-            {
-                var existingColumn = table.Columns.FirstOrDefault(c => c.Id == modifiedColumnRequest.ColumnId);
-                if (existingColumn == null) continue;
-
-                var updateResult = await _dataDefinitionService.UpdateColumnAsync(table.TableName, existingColumn, modifiedColumnRequest, userId);
-                if (updateResult.Success)
+                // 3. ADD NEW COLUMNS
+                foreach (var columnRequest in columnsToAdd)
                 {
-                    existingColumn.ColumnName = modifiedColumnRequest.ColumnName;
-                    existingColumn.DataType = modifiedColumnRequest.DataType;
-                    existingColumn.IsRequired = modifiedColumnRequest.IsRequired;
-                    existingColumn.DisplayOrder = modifiedColumnRequest.DisplayOrder;
-                    existingColumn.DefaultValue = modifiedColumnRequest.DefaultValue;
-                    existingColumn.UpdatedAt = DateTime.UtcNow;
+                    _logger.LogInformation("Adding column: {ColumnName} ({DataType})", columnRequest.ColumnName, columnRequest.DataType);
+                    var addResult = await _dataDefinitionService.AddColumnDirectAsync(physicalTableName, columnRequest);
+                    if (addResult.Success)
+                    {
+                        result.ExecutedQueries.Add($"Added column: {columnRequest.ColumnName}");
 
-                    executedQueries.AddRange(updateResult.ExecutedQueries ?? new List<string>());
-                    totalAffectedRows += updateResult.AffectedRows;
+                        var newColumn = new CustomColumn
+                        {
+                            ColumnName = columnRequest.ColumnName,
+                            DataType = columnRequest.DataType,
+                            IsRequired = columnRequest.IsRequired,
+                            DisplayOrder = columnRequest.DisplayOrder,
+                            DefaultValue = columnRequest.DefaultValue,
+                            CreatedAt = DateTime.UtcNow
+                        };
+                        table.Columns.Add(newColumn);
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Failed to add column {ColumnName}: {Message}", columnRequest.ColumnName, addResult.Message);
+                    }
                 }
+
+                // 4. UPDATE EXISTING COLUMNS
+                foreach (var columnRequest in columnsToUpdate)
+                {
+                    var existingColumn = existingColumns.FirstOrDefault(c =>
+                        c.ColumnName.Equals(columnRequest.ColumnName, StringComparison.OrdinalIgnoreCase));
+
+                    if (existingColumn != null)
+                    {
+                        _logger.LogInformation("Updating column: {ColumnName}", columnRequest.ColumnName);
+
+                        // Update EF entity
+                        existingColumn.DataType = columnRequest.DataType;
+                        existingColumn.IsRequired = columnRequest.IsRequired;
+                        existingColumn.DisplayOrder = columnRequest.DisplayOrder;
+                        existingColumn.DefaultValue = columnRequest.DefaultValue;
+                        existingColumn.UpdatedAt = DateTime.UtcNow;
+
+                        result.ExecutedQueries.Add($"Updated column metadata: {columnRequest.ColumnName}");
+                    }
+                }
+
+                _logger.LogInformation("Column update completed successfully");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error updating table columns for table {TableName}", table.TableName);
+                result.Success = false;
+                result.Message = "Kolon güncellemesinde hata: " + ex.Message;
             }
 
-            return (executedQueries, totalAffectedRows);
+            return result;
         }
-
- 
-
-
-
-
-
-
-
-
 
 
 

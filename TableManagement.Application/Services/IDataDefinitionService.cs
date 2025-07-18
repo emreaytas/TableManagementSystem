@@ -36,6 +36,17 @@ namespace TableManagement.Application.Services
         Task<DDLOperationResult> DropColumnAsync(string tableName, string columnName, int userId);
         Task<DDLOperationResult> AddColumnAsync(string tableName, UpdateColumnRequest columnRequest, int userId);
         Task<DDLOperationResult> UpdateColumnAsync(string tableName, CustomColumn existingColumn, UpdateColumnRequest updateRequest, int userId);
+        Task<bool> RenamePhysicalTableAsync(string oldTableName, string newTableName, int userId);
+        Task<bool> TableExistsAsync(string physicalTableName);
+        Task<List<string>> GetAllUserTablesAsync(int userId);
+        Task<bool> RenamePhysicalTableDirectAsync(string oldPhysicalTableName, string newPhysicalTableName);
+        Task<DDLOperationResult> DropColumnDirectAsync(string physicalTableName, string columnName);
+
+        Task<DDLOperationResult> AddColumnDirectAsync(string physicalTableName, UpdateColumnRequest columnRequest);
+
+        Task<List<string>> GetAllTablesDebugAsync();
+
+
     }
 
     // Result class for DDL operations

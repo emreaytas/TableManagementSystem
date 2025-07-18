@@ -1,6 +1,7 @@
 ﻿using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using System.Data;
 using TableManagement.Application.DTOs.Requests;
 using TableManagement.Core.Entities;
 using TableManagement.Core.Enums;
@@ -225,6 +226,116 @@ namespace TableManagement.Application.Services
             {
                 _logger.LogError(ex, "Error updating data in table {TableName} for user {UserId}", tableName, userId);
                 return false;
+            }
+        }
+
+        public async Task<bool> RenamePhysicalTableAsync(string oldPhysicalTableName, string newLogicalTableName, int userId)
+        {
+            try
+            {
+                var newSecureTableName = GenerateSecureTableName(newLogicalTableName, userId);
+
+                _logger.LogInformation("Attempting to rename physical table from {OldTableName} to {NewTableName} for user {UserId}",
+                    oldPhysicalTableName, newSecureTableName, userId);
+
+                using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                // Önce eski tablonun var olup olmadığını kontrol et
+                var tableExists = await TableExistsAsync(oldPhysicalTableName);
+                if (!tableExists)
+                {
+                    _logger.LogWarning("Old physical table {OldTableName} does not exist for user {UserId}", oldPhysicalTableName, userId);
+                    return false;
+                }
+
+                // Yeni tablo adının zaten kullanılmadığından emin ol
+                var newTableExists = await TableExistsAsync(newSecureTableName);
+                if (newTableExists)
+                {
+                    _logger.LogError("New table name {NewTableName} already exists for user {UserId}", newSecureTableName, userId);
+                    return false;
+                }
+
+                // Tabloyu yeniden adlandır
+                var renameQuery = $"EXEC sp_rename '[{oldPhysicalTableName}]', '{newSecureTableName}'";
+                using var command = new SqlCommand(renameQuery, connection);
+                await command.ExecuteNonQueryAsync();
+
+                _logger.LogInformation("Table successfully renamed from {OldTableName} to {NewTableName} for user {UserId}",
+                    oldPhysicalTableName, newSecureTableName, userId);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error renaming physical table from {OldTableName} to {NewTableName} for user {UserId}",
+                    oldPhysicalTableName, newLogicalTableName, userId);
+                return false;
+            }
+        }
+
+        public async Task<bool> TableExistsAsync(string physicalTableName)
+        {
+            try
+            {
+                using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                var tableExistsQuery = @"
+            SELECT COUNT(*) 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_NAME = @tableName AND TABLE_SCHEMA = 'dbo'";
+
+                using var command = new SqlCommand(tableExistsQuery, connection);
+                command.Parameters.AddWithValue("@tableName", physicalTableName);
+
+                var count = (int)await command.ExecuteScalarAsync();
+                var exists = count > 0;
+
+                _logger.LogDebug("Table {TableName} exists: {Exists}", physicalTableName, exists);
+                return exists;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error checking if table {TableName} exists", physicalTableName);
+                return false;
+            }
+        }
+
+        public async Task<List<string>> GetAllUserTablesAsync(int userId)
+        {
+            try
+            {
+                using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                var query = @"
+            SELECT TABLE_NAME 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_SCHEMA = 'dbo' 
+            AND TABLE_NAME LIKE 'Table_' + @userId + '_%'
+            ORDER BY TABLE_NAME";
+
+                using var command = new SqlCommand(query, connection);
+                command.Parameters.AddWithValue("@userId", userId);
+
+                var tables = new List<string>();
+                using var reader = await command.ExecuteReaderAsync();
+
+                while (await reader.ReadAsync())
+                {
+                    tables.Add(reader.GetString("TABLE_NAME"));
+                }
+
+                _logger.LogInformation("Found {Count} tables for user {UserId}: {Tables}",
+                    tables.Count, userId, string.Join(", ", tables));
+
+                return tables;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting all user tables for user {UserId}", userId);
+                return new List<string>();
             }
         }
 
@@ -781,23 +892,260 @@ namespace TableManagement.Application.Services
             };
         }
 
-        private string FormatDefaultValue(string value, ColumnDataType dataType)
-        {
-            if (string.IsNullOrEmpty(value)) return "NULL";
 
-            return dataType switch
+
+
+        public async Task<List<string>> GetAllTablesDebugAsync()
+        {
+            // Hata durumunda boş liste dönebilmek için listeyi try bloğunun dışında başlatabiliriz,
+            // ancak her iki durumda da yeni liste döndürdüğümüz için try içinde kalması daha temizdir.
+            try
             {
-                ColumnDataType.VARCHAR => $"'{value.Replace("'", "''")}'",
-                ColumnDataType.INT => int.TryParse(value, out _) ? value : "0",
-                ColumnDataType.DECIMAL => decimal.TryParse(value, out _) ? value : "0.0",
-                ColumnDataType.DATETIME => value.ToUpperInvariant() == "GETDATE()" ? "GETDATE()" : $"'{value}'",
-                _ => $"'{value}'"
-            };
+                var tables = new List<string>();
+
+                // 'using var', veritabanı bağlantısı gibi kaynakların işi bittiğinde
+                // otomatik ve güvenli bir şekilde kapatılmasını sağlar.
+                using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                var query = @"
+            SELECT TABLE_NAME 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_SCHEMA = 'dbo'
+            ORDER BY TABLE_NAME";
+
+                using var command = new SqlCommand(query, connection);
+                using var reader = await command.ExecuteReaderAsync();
+
+                while (await reader.ReadAsync())
+                {
+                    // SqlDataReader'dan veri okurken sütun adıyla doğrudan string alınamaz.
+                    // Sütunun sıra numarası (index) kullanılmalıdır. Sorguda tek sütun
+                    // seçtiğimiz için indeksi 0'dır.
+                    tables.Add(reader.GetString(0));
+                }
+
+                _logger.LogInformation("DEBUG: {Count} adet tablo bulundu: {Tables}",
+                    tables.Count, string.Join(", ", tables));
+
+                return tables;
+            }
+            catch (Exception ex)
+            {
+                // Hata oluştuğunda loglama yapılır.
+                _logger.LogError(ex, "DEBUG için tüm tablolar alınırken bir hata oluştu.");
+
+                // Hata durumunda istemciye boş bir liste döndürülür.
+                return new List<string>();
+            }
         }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        // DataDefinitionService.cs - Direkt fiziksel tablo işlemleri
+
+        /// <summary>
+        /// Fiziksel tabloyu direkt yeniden adlandırır (logical name conversion yapmaz)
+        /// </summary>
+        public async Task<bool> RenamePhysicalTableDirectAsync(string oldPhysicalTableName, string newPhysicalTableName)
+        {
+            try
+            {
+                _logger.LogInformation("Direct rename: {OldName} -> {NewName}", oldPhysicalTableName, newPhysicalTableName);
+
+                using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                // Eski tablonun varlığını kontrol et
+                var oldExists = await TableExistsAsync(oldPhysicalTableName);
+                if (!oldExists)
+                {
+                    _logger.LogWarning("Source table does not exist: {TableName}", oldPhysicalTableName);
+                    return false;
+                }
+
+                // Yeni tablo adının çakışmamasını kontrol et
+                var newExists = await TableExistsAsync(newPhysicalTableName);
+                if (newExists)
+                {
+                    _logger.LogError("Target table already exists: {TableName}", newPhysicalTableName);
+                    return false;
+                }
+
+                // Tabloyu yeniden adlandır
+                var renameQuery = $"EXEC sp_rename '[{oldPhysicalTableName}]', '{newPhysicalTableName}'";
+                using var command = new SqlCommand(renameQuery, connection);
+                await command.ExecuteNonQueryAsync();
+
+                _logger.LogInformation("Physical table renamed successfully: {OldName} -> {NewName}",
+                    oldPhysicalTableName, newPhysicalTableName);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error renaming physical table: {OldName} -> {NewName}",
+                    oldPhysicalTableName, newPhysicalTableName);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Fiziksel tablodan direkt kolon siler
+        /// </summary>
+        public async Task<DDLOperationResult> DropColumnDirectAsync(string physicalTableName, string columnName)
+        {
+            var result = new DDLOperationResult();
+
+            try
+            {
+                _logger.LogInformation("Dropping column {ColumnName} from table {TableName}", columnName, physicalTableName);
+
+                using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                var dropQuery = $"ALTER TABLE [{physicalTableName}] DROP COLUMN [{columnName}]";
+                using var command = new SqlCommand(dropQuery, connection);
+                await command.ExecuteNonQueryAsync();
+
+                result.Success = true;
+                result.Message = $"Column {columnName} dropped successfully";
+                result.ExecutedQueries = new List<string> { dropQuery };
+
+                _logger.LogInformation("Column {ColumnName} dropped from {TableName}", columnName, physicalTableName);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error dropping column {ColumnName} from {TableName}", columnName, physicalTableName);
+                result.Message = "Kolon silinirken hata: " + ex.Message;
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Fiziksel tabloya direkt kolon ekler
+        /// </summary>
+        public async Task<DDLOperationResult> AddColumnDirectAsync(string physicalTableName, UpdateColumnRequest columnRequest)
+        {
+            var result = new DDLOperationResult();
+
+            try
+            {
+                _logger.LogInformation("Adding column {ColumnName} to table {TableName}",
+                    columnRequest.ColumnName, physicalTableName);
+
+                var sqlDataType = ConvertToSqlDataType(columnRequest.DataType);
+
+                using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                var addQuery = $"ALTER TABLE [{physicalTableName}] ADD [{columnRequest.ColumnName}] {sqlDataType}";
+
+                // Default value ekle
+                if (!string.IsNullOrEmpty(columnRequest.DefaultValue))
+                {
+                    var defaultValue = FormatDefaultValue(columnRequest.DefaultValue, columnRequest.DataType);
+                    addQuery += $" DEFAULT {defaultValue}";
+                }
+
+                // NOT NULL constraint ekle (eğer default value varsa)
+                if (columnRequest.IsRequired && !string.IsNullOrEmpty(columnRequest.DefaultValue))
+                {
+                    addQuery += " NOT NULL";
+                }
+
+                using var command = new SqlCommand(addQuery, connection);
+                await command.ExecuteNonQueryAsync();
+
+                result.Success = true;
+                result.Message = $"Column {columnRequest.ColumnName} added successfully";
+                result.ExecutedQueries = new List<string> { addQuery };
+
+                _logger.LogInformation("Column {ColumnName} added to {TableName}",
+                    columnRequest.ColumnName, physicalTableName);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error adding column {ColumnName} to {TableName}",
+                    columnRequest.ColumnName, physicalTableName);
+                result.Message = "Kolon eklenirken hata: " + ex.Message;
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Default value'yu SQL formatına çevirir
+        /// </summary>
+        private string FormatDefaultValue(string value, ColumnDataType dataType)
+        {
+            if (string.IsNullOrEmpty(value))
+                return "NULL";
+
+            switch (dataType)
+            {
+                case ColumnDataType.VARCHAR:
+                    return $"'{value.Replace("'", "''")}'"; // SQL injection koruması
+
+                case ColumnDataType.INT:
+                    if (int.TryParse(value, out int intValue))
+                        return intValue.ToString();
+                    return "0";
+
+                case ColumnDataType.DECIMAL:
+                    if (decimal.TryParse(value, out decimal decimalValue))
+                        return decimalValue.ToString().Replace(",", ".");
+                    return "0.00";
+
+                case ColumnDataType.DATETIME:
+                    if (DateTime.TryParse(value, out DateTime dateValue))
+                        return $"'{dateValue:yyyy-MM-dd HH:mm:ss}'";
+                    return "GETDATE()";
+
+                default:
+                    return $"'{value}'";
+            }
+        }
+
+        /// <summary>
+        /// Güvenli kolon adı oluşturur
+        /// </summary>
         private string SanitizeColumnName(string columnName)
         {
-            return columnName.Replace(" ", "_").Replace("-", "_");
+            if (string.IsNullOrEmpty(columnName))
+                return "UnknownColumn";
+
+            // SQL injection koruması ve özel karakterleri temizle
+            return columnName
+                .Replace("[", "")
+                .Replace("]", "")
+                .Replace(";", "")
+                .Replace("--", "")
+                .Replace("/*", "")
+                .Replace("*/", "")
+                .Replace("'", "")
+                .Replace("\"", "")
+                .Trim();
         }
     }
 }

@@ -573,8 +573,11 @@ namespace TableManagement.API.Controllers
             }
         }
 
+        // TableManagement.API/Controllers/TablesController.cs
+        // UpdateTable metodunu tam haliyle güncelleyin:
+
         /// <summary>
-        /// Tabloyu günceller
+        /// Tabloyu günceller - Akıllı veri kontrolü ile
         /// </summary>
         [HttpPut("{id}")]
         public async Task<IActionResult> UpdateTable(int id, [FromBody] UpdateTableRequest request)
@@ -587,9 +590,9 @@ namespace TableManagement.API.Controllers
             try
             {
                 var userId = GetCurrentUserId();
-                _logger.LogInformation("Updating table {TableId} by user {UserId}", id, userId);
+                _logger.LogInformation("🔄 Starting table update for {TableId} by user {UserId}", id, userId);
 
-                // First validate the update
+                // 🔥 ADIM 1: Validasyon kontrolü yap
                 var validateRequest = new ValidateTableUpdateRequest
                 {
                     TableId = request.TableId,
@@ -600,60 +603,141 @@ namespace TableManagement.API.Controllers
 
                 var validationResult = await _tableService.ValidateTableUpdateAsync(id, validateRequest, userId);
 
+                _logger.LogInformation("📋 Validation completed - IsValid: {IsValid}, RequiresForce: {RequiresForce}, HasDataIssues: {HasDataIssues}",
+                    validationResult.IsValid, validationResult.RequiresForceUpdate, validationResult.HasDataCompatibilityIssues);
+
+                // 🔥 ADIM 2: Geçersiz validasyon
                 if (!validationResult.IsValid)
                 {
+                    _logger.LogWarning("❌ Validation failed for table {TableId}: {Issues}", id, string.Join(", ", validationResult.Issues));
                     return BadRequest(new
                     {
                         success = false,
                         message = "Tablo güncellemesi geçersiz",
                         issues = validationResult.Issues,
                         dataIssues = validationResult.DataIssues,
-                        columnIssues = validationResult.ColumnIssues
+                        columnIssues = validationResult.ColumnIssues,
+                        validationResult = validationResult
                     });
                 }
 
-                if (validationResult.RequiresForceUpdate && !request.Columns?.Any(c => c.ForceUpdate) == true)
+                // 🔥 ADIM 3: Force update gerekli mi kontrol et
+                var requiresForceUpdate = validationResult.RequiresForceUpdate;
+                var hasForceUpdatePermission = request.Columns?.Any(c => c.ForceUpdate == true) == true;
+
+                if (requiresForceUpdate && !hasForceUpdatePermission)
                 {
+                    _logger.LogWarning("⚠️ Force update required for table {TableId} but not provided", id);
+
+                    // Detaylı mesaj hazırla
+                    var forceUpdateReasons = new List<string>();
+
+                    if (validationResult.ColumnIssues?.Any() == true)
+                    {
+                        foreach (var issue in validationResult.ColumnIssues)
+                        {
+                            if (issue.Value?.Any(v => !v.StartsWith("✅") && !v.StartsWith("ℹ️")) == true)
+                            {
+                                forceUpdateReasons.AddRange(issue.Value.Where(v => !v.StartsWith("✅") && !v.StartsWith("ℹ️")));
+                            }
+                        }
+                    }
+
+                    if (validationResult.DataIssues?.Any() == true)
+                    {
+                        forceUpdateReasons.AddRange(validationResult.DataIssues);
+                    }
+
                     return BadRequest(new
                     {
                         success = false,
                         message = "Bu güncelleme veri kaybına neden olabilir. Zorla güncelleme gerekli.",
                         requiresForceUpdate = true,
+                        forceUpdateReasons = forceUpdateReasons,
+                        columnIssues = validationResult.ColumnIssues,
+                        dataIssues = validationResult.DataIssues,
                         validationResult = validationResult
                     });
                 }
 
-                // Perform the update
+                // 🔥 ADIM 4: Güncellemeyi gerçekleştir
+                _logger.LogInformation("✅ Proceeding with table update for {TableId}", id);
+
                 var updateResult = await _tableService.UpdateTableAsync(id, request, userId);
 
                 if (!updateResult.Success)
                 {
+                    _logger.LogError("❌ Table update failed for {TableId}: {Message}", id, updateResult.Message);
                     return BadRequest(new
                     {
                         success = false,
-                        message = updateResult.Message
+                        message = updateResult.Message,
+                        validationResult = updateResult.ValidationResult
                     });
                 }
 
-                _logger.LogInformation("Table {TableId} updated successfully by user {UserId}", id, userId);
+                // 🔥 ADIM 5: Başarılı yanıt
+                _logger.LogInformation("🎉 Table {TableId} updated successfully by user {UserId}. Affected rows: {AffectedRows}",
+                    id, userId, updateResult.AffectedRows);
 
-                return Ok(new
+                // Güvenli değişiklikleri ve uyarıları ayır
+                var safeChanges = new List<string>();
+                var warningChanges = new List<string>();
+
+                if (validationResult.ColumnIssues?.Any() == true)
+                {
+                    foreach (var columnIssue in validationResult.ColumnIssues)
+                    {
+                        foreach (var issue in columnIssue.Value ?? new List<string>())
+                        {
+                            if (issue.StartsWith("✅") || issue.StartsWith("ℹ️"))
+                            {
+                                safeChanges.Add($"{columnIssue.Key}: {issue}");
+                            }
+                            else if (issue.StartsWith("⚠️"))
+                            {
+                                warningChanges.Add($"{columnIssue.Key}: {issue}");
+                            }
+                        }
+                    }
+                }
+
+                var response = new
                 {
                     success = true,
-                    message = "Tablo başarıyla güncellendi",
+                    message = updateResult.Message,
                     table = updateResult.Table,
                     executedQueries = updateResult.ExecutedQueries,
                     affectedRows = updateResult.AffectedRows,
-                    backupCreated = updateResult.BackupCreated
+                    validationResult = new
+                    {
+                        safeChanges = safeChanges,
+                        warningChanges = warningChanges,
+                        columnIssues = validationResult.ColumnIssues,
+                        hasStructuralChanges = validationResult.HasStructuralChanges,
+                        hasDataCompatibilityIssues = validationResult.HasDataCompatibilityIssues
+                    }
+                };
+
+                return Ok(response);
+            }
+            catch (ArgumentException ex)
+            {
+                _logger.LogWarning("🔍 Table {TableId} not found for user {UserId}: {Message}", id, GetCurrentUserId(), ex.Message);
+                return NotFound(new
+                {
+                    success = false,
+                    message = ex.Message
                 });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error updating table {TableId} by user {UserId}", id, GetCurrentUserId());
+                _logger.LogError(ex, "💥 Unexpected error updating table {TableId} for user {UserId}", id, GetCurrentUserId());
                 return StatusCode(500, new
                 {
                     success = false,
-                    message = "Tablo güncellenirken hata oluştu."
+                    message = "Tablo güncellenirken beklenmeyen bir hata oluştu.",
+                    details = ex.Message
                 });
             }
         }

@@ -327,48 +327,71 @@ namespace TableManagement.Application.Services
             return result;
         }
 
+        // TableManagement.Application/Services/TableService.cs
+        // ValidateColumnChangesAsync metodunu güncelleyin:
+
         private async Task ValidateColumnChangesAsync(CustomTable existingTable, List<UpdateColumnRequest> newColumns, TableValidationResult result, int userId)
         {
             var existingColumns = existingTable.Columns.ToList();
 
-            // Check for column deletions
+            // 🔥 ANAHTAR KONTROL: Tabloda gerçekten veri var mı?
+            var tableRowCount = await _dataDefinitionService.GetTableRowCountAsync(existingTable.TableName, userId);
+
+            _logger.LogInformation("Table {TableName} has {RowCount} rows for validation", existingTable.TableName, tableRowCount);
+
+            // Kolon silme kontrolü
             var deletedColumns = existingColumns.Where(ec => !newColumns.Any(nc => nc.ColumnId == ec.Id)).ToList();
             foreach (var deletedColumn in deletedColumns)
             {
                 result.HasStructuralChanges = true;
-                var hasData = await _dataDefinitionService.ColumnHasDataAsync(existingTable.TableName, deletedColumn.ColumnName, userId);
-                if (hasData)
+
+                // 🔥 AKILLI KONTROL: Bu kolonda gerçekten veri var mı?
+                var columnHasData = await _dataDefinitionService.ColumnHasDataAsync(existingTable.TableName, deletedColumn.ColumnName, userId);
+
+                if (columnHasData)
                 {
                     result.HasDataCompatibilityIssues = true;
                     result.RequiresForceUpdate = true;
                     result.ColumnIssues[$"{deletedColumn.ColumnName}"] = new List<string> { "Kolonun silinmesi veri kaybına neden olacak" };
+                    _logger.LogWarning("Column {ColumnName} has data and will cause data loss if deleted", deletedColumn.ColumnName);
+                }
+                else
+                {
+                    _logger.LogInformation("Column {ColumnName} has no data, deletion is safe", deletedColumn.ColumnName);
                 }
             }
 
-            // Check for new columns
+            // Yeni kolon ekleme kontrolü
             var newColumnRequests = newColumns.Where(nc => nc.ColumnId == null || nc.ColumnId == 0).ToList();
             foreach (var newColumn in newColumnRequests)
             {
                 result.HasStructuralChanges = true;
 
+                // 🔥 AKILLI KONTROL: Yeni kolon zorunlu ve default değer yok, ama tabloda veri var mı?
                 if (newColumn.IsRequired && string.IsNullOrEmpty(newColumn.DefaultValue))
                 {
-                    var hasExistingData = await _dataDefinitionService.GetTableRowCountAsync(existingTable.TableName, userId) > 0;
-                    if (hasExistingData)
+                    if (tableRowCount > 0)
                     {
                         result.HasDataCompatibilityIssues = true;
                         result.RequiresForceUpdate = true;
                         result.ColumnIssues[newColumn.ColumnName] = new List<string> { "Zorunlu kolon mevcut verilerle uyumlu değil" };
+                        _logger.LogWarning("Required column {ColumnName} without default value will conflict with existing {RowCount} rows",
+                            newColumn.ColumnName, tableRowCount);
+                    }
+                    else
+                    {
+                        _logger.LogInformation("Required column {ColumnName} is safe to add - no existing data", newColumn.ColumnName);
                     }
                 }
             }
 
-            // Check for column modifications
+            // Kolon değişiklik kontrolü
             foreach (var modifiedColumn in newColumns.Where(nc => nc.ColumnId.HasValue && nc.ColumnId > 0))
             {
                 var existingColumn = existingColumns.FirstOrDefault(ec => ec.Id == modifiedColumn.ColumnId);
                 if (existingColumn == null) continue;
 
+                // 🔥 AKILLI VERİ TİPİ DEĞİŞİKLİK KONTROLÜ
                 if (existingColumn.DataType != modifiedColumn.DataType)
                 {
                     result.HasStructuralChanges = true;
@@ -380,6 +403,8 @@ namespace TableManagement.Application.Services
                     {
                         result.IsValid = false;
                         result.ColumnIssues[existingColumn.ColumnName] = validationResult.Issues;
+                        _logger.LogError("Data type change validation failed for column {ColumnName}: {Issues}",
+                            existingColumn.ColumnName, string.Join(", ", validationResult.Issues));
                     }
                     else if (validationResult.HasDataCompatibilityIssues)
                     {
@@ -389,23 +414,76 @@ namespace TableManagement.Application.Services
                             result.RequiresForceUpdate = true;
                         }
                         result.ColumnIssues[existingColumn.ColumnName] = validationResult.DataIssues;
+                        _logger.LogWarning("Data type change for column {ColumnName} has compatibility issues: {Issues}",
+                            existingColumn.ColumnName, string.Join(", ", validationResult.DataIssues));
+                    }
+                    else
+                    {
+                        // 🔥 GÜVENLİ DEĞİŞİKLİK - Kullanıcıyı bilgilendir
+                        _logger.LogInformation("Data type change for column {ColumnName} from {OldType} to {NewType} is safe",
+                            existingColumn.ColumnName, existingColumn.DataType, modifiedColumn.DataType);
+
+                        // Güvenli değişiklikleri ayrı bir listede tut
+                        if (!result.ColumnIssues.ContainsKey(existingColumn.ColumnName))
+                        {
+                            result.ColumnIssues[existingColumn.ColumnName] = new List<string>();
+                        }
+
+                        // Safe change indicator
+                        var safeChangeMessage = GetSafeChangeMessage(existingColumn.DataType, modifiedColumn.DataType);
+                        if (!string.IsNullOrEmpty(safeChangeMessage))
+                        {
+                            result.ColumnIssues[existingColumn.ColumnName].Add($"✅ {safeChangeMessage}");
+                        }
                     }
                 }
 
-                // Check required constraint changes
-                if (!existingColumn.IsRequired && modifiedColumn.IsRequired)
+                // 🔥 KOLON ADI DEĞİŞİKLİK KONTROLÜ
+                if (existingColumn.ColumnName != modifiedColumn.ColumnName)
                 {
-                    var hasNullData = await _dataDefinitionService.ColumnHasNullDataAsync(existingTable.TableName, existingColumn.ColumnName, userId);
-                    if (hasNullData)
+                    result.HasStructuralChanges = true;
+
+                    // Kolon adı değişikliği genelde güvenlidir ama bilgilendirme amaçlı
+                    if (!result.ColumnIssues.ContainsKey(existingColumn.ColumnName))
                     {
-                        result.HasDataCompatibilityIssues = true;
-                        result.RequiresForceUpdate = true;
-                        if (!result.ColumnIssues.ContainsKey(existingColumn.ColumnName))
-                            result.ColumnIssues[existingColumn.ColumnName] = new List<string>();
-                        result.ColumnIssues[existingColumn.ColumnName].Add("Kolonun zorunlu yapılması NULL verilerle uyumlu değil");
+                        result.ColumnIssues[existingColumn.ColumnName] = new List<string>();
+                    }
+                    result.ColumnIssues[existingColumn.ColumnName].Add($"ℹ️ Kolon adı '{existingColumn.ColumnName}' → '{modifiedColumn.ColumnName}' olarak değiştirilecek");
+                }
+
+                // 🔥 ZORUNLULUK DEĞİŞİKLİK KONTROLÜ
+                if (existingColumn.IsRequired != modifiedColumn.IsRequired)
+                {
+                    if (modifiedColumn.IsRequired && !existingColumn.IsRequired)
+                    {
+                        // NULL olmayan kolon zorunlu yapılıyor - veri kontrolü gerekli
+                        var columnHasNullData = await _dataDefinitionService.ColumnHasNullDataAsync(existingTable.TableName, existingColumn.ColumnName, userId);
+                        if (columnHasNullData && string.IsNullOrEmpty(modifiedColumn.DefaultValue))
+                        {
+                            result.HasDataCompatibilityIssues = true;
+                            result.RequiresForceUpdate = true;
+                            if (!result.ColumnIssues.ContainsKey(existingColumn.ColumnName))
+                            {
+                                result.ColumnIssues[existingColumn.ColumnName] = new List<string>();
+                            }
+                            result.ColumnIssues[existingColumn.ColumnName].Add("⚠️ Kolon zorunlu yapılıyor ama NULL değerler mevcut");
+                        }
                     }
                 }
             }
+        }
+
+        // 🔥 YENİ YARDIMCI METOD: Güvenli değişiklik mesajları
+        private string GetSafeChangeMessage(ColumnDataType from, ColumnDataType to)
+        {
+            return (from, to) switch
+            {
+                (ColumnDataType.INT, ColumnDataType.DECIMAL) => "INT'den DECIMAL'e güvenli dönüşüm",
+                (ColumnDataType.INT, ColumnDataType.VARCHAR) => "INT'den VARCHAR'a güvenli dönüşüm",
+                (ColumnDataType.DECIMAL, ColumnDataType.VARCHAR) => "DECIMAL'den VARCHAR'a güvenli dönüşüm",
+                (ColumnDataType.DATETIME, ColumnDataType.VARCHAR) => "DATETIME'dan VARCHAR'a güvenli dönüşüm",
+                _ => ""
+            };
         }
 
 

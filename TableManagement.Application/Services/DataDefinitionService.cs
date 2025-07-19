@@ -342,6 +342,21 @@ namespace TableManagement.Application.Services
             }
         }
 
+
+
+        private string GetConversionWarningMessage(ColumnDataType from, ColumnDataType to)
+        {
+            return (from, to) switch
+            {
+                (ColumnDataType.VARCHAR, ColumnDataType.INT) => "Geçersiz sayısal veriler sıfır olacak",
+                (ColumnDataType.VARCHAR, ColumnDataType.DECIMAL) => "Geçersiz ondalık veriler sıfır olacak",
+                (ColumnDataType.VARCHAR, ColumnDataType.DATETIME) => "Geçersiz tarih verileri null olacak",
+                (ColumnDataType.DECIMAL, ColumnDataType.INT) => "Ondalık kısımlar kaybolacak",
+                _ => "Bu dönüşüm veri değişikliğine neden olabilir"
+            };
+        }
+
+
         public async Task<bool> DeleteDataFromUserTableAsync(string tableName, string whereClause, int userId)
         {
             try
@@ -434,6 +449,80 @@ namespace TableManagement.Application.Services
 
             return result;
         }
+
+        public async Task<ColumnValidationResult> ValidateColumnDataTypeChangeAsync(
+    string tableName, string columnName, ColumnDataType currentType, ColumnDataType newType, int userId)
+        {
+            var result = new ColumnValidationResult { IsValid = true };
+
+            try
+            {
+                // Dönüşüm mümkün mü kontrol et
+                if (!CanConvertDataType(currentType, newType))
+                {
+                    result.IsValid = false;
+                    result.Issues.Add($"{currentType} tipinden {newType} tipine dönüşüm desteklenmiyor");
+                    return result;
+                }
+
+                // Satır sayısını al
+                result.AffectedRowCount = await GetTableRowCountAsync(tableName, userId);
+
+                // 🔥 ANAHTAR DEĞİŞİKLİK: Eğer tabloda hiç veri yoksa, her türlü değişikliğe izin ver
+                if (result.AffectedRowCount == 0)
+                {
+                    result.HasDataCompatibilityIssues = false;
+                    result.RequiresForceUpdate = false;
+                    result.DataIssues.Clear();
+                    _logger.LogInformation("Table {TableName} is empty, allowing all data type changes", tableName);
+                    return result;
+                }
+
+                // 🔥 ANAHTAR DEĞİŞİKLİK: Bu kolonda gerçekten veri var mı kontrol et
+                var columnHasActualData = await ColumnHasDataAsync(tableName, columnName, userId);
+
+                if (!columnHasActualData)
+                {
+                    result.HasDataCompatibilityIssues = false;
+                    result.RequiresForceUpdate = false;
+                    result.DataIssues.Clear();
+                    _logger.LogInformation("Column {ColumnName} in table {TableName} has no actual data, allowing data type change",
+                        columnName, tableName);
+                    return result;
+                }
+
+                // Bu noktada gerçekten veri var, şimdi dönüşümü kontrol et
+                if (IsLossyConversion(currentType, newType))
+                {
+                    // Daha detaylı kontrol yap - gerçekten veri kaybı olacak mı?
+                    var actualDataLoss = await WillCauseActualDataLossAsync(tableName, columnName, currentType, newType, userId);
+
+                    if (actualDataLoss)
+                    {
+                        result.HasDataCompatibilityIssues = true;
+                        result.RequiresForceUpdate = true;
+                        result.DataIssues.Add(GetConversionWarningMessage(currentType, newType));
+                    }
+                    else
+                    {
+                        // Teorik olarak lossy ama pratikte veri kaybı yok
+                        result.HasDataCompatibilityIssues = false;
+                        result.RequiresForceUpdate = false;
+                        _logger.LogInformation("Conversion from {CurrentType} to {NewType} is theoretically lossy but no actual data loss detected",
+                            currentType, newType);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error validating column data type change for {TableName}.{ColumnName}", tableName, columnName);
+                result.IsValid = false;
+                result.Issues.Add("Validasyon sırasında hata oluştu: " + ex.Message);
+            }
+
+            return result;
+        }
+
 
         public async Task<ColumnValidationResult> ValidateColumnUpdateAsync(string tableName, string columnName, ColumnDataType newDataType, int userId)
         {
@@ -552,18 +641,37 @@ namespace TableManagement.Application.Services
                 using var connection = new SqlConnection(_connectionString);
                 await connection.OpenAsync();
 
-                var query = $"SELECT COUNT(*) FROM [{secureTableName}]";
-                using var command = new SqlCommand(query, connection);
+                // Önce tablo var mı kontrol et
+                var tableExistsQuery = @"
+            SELECT COUNT(*) 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_NAME = @tableName AND TABLE_SCHEMA = 'dbo'";
 
-                var result = await command.ExecuteScalarAsync();
-                return Convert.ToInt32(result);
+                using var checkCommand = new SqlCommand(tableExistsQuery, connection);
+                checkCommand.Parameters.AddWithValue("@tableName", secureTableName);
+                var tableExists = (int)await checkCommand.ExecuteScalarAsync() > 0;
+
+                if (!tableExists)
+                {
+                    _logger.LogWarning("Table {SecureTableName} does not exist", secureTableName);
+                    return 0;
+                }
+
+                // Satır sayısını al
+                var countQuery = $"SELECT COUNT(*) FROM [{secureTableName}]";
+                using var countCommand = new SqlCommand(countQuery, connection);
+                var rowCount = (int)await countCommand.ExecuteScalarAsync();
+
+                _logger.LogInformation("Table {SecureTableName} has {RowCount} rows", secureTableName, rowCount);
+                return rowCount;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error getting row count for table {TableName} for user {UserId}", tableName, userId);
+                _logger.LogError(ex, "Error getting row count for table {TableName}", tableName);
                 return 0;
             }
         }
+
 
         public async Task<long> EstimateTableSizeAsync(string tableName, int userId)
         {
@@ -606,87 +714,94 @@ namespace TableManagement.Application.Services
             try
             {
                 var secureTableName = GenerateSecureTableName(tableName, userId);
-                var sanitizedColumnName = SanitizeColumnName(columnName);
 
                 using var connection = new SqlConnection(_connectionString);
                 await connection.OpenAsync();
 
-                var query = $"SELECT COUNT(*) FROM [{secureTableName}] WHERE [{sanitizedColumnName}] IS NOT NULL";
-                using var command = new SqlCommand(query, connection);
+                // Önce tablo var mı kontrol et
+                var tableExistsQuery = @"
+            SELECT COUNT(*) 
+            FROM INFORMATION_SCHEMA.TABLES 
+            WHERE TABLE_NAME = @tableName AND TABLE_SCHEMA = 'dbo'";
 
-                var result = await command.ExecuteScalarAsync();
-                return Convert.ToInt32(result) > 0;
+                using var checkCommand = new SqlCommand(tableExistsQuery, connection);
+                checkCommand.Parameters.AddWithValue("@tableName", secureTableName);
+                var tableExists = (int)await checkCommand.ExecuteScalarAsync() > 0;
+
+                if (!tableExists)
+                {
+                    _logger.LogWarning("Table {SecureTableName} does not exist", secureTableName);
+                    return false;
+                }
+
+                // Kolon var mı kontrol et
+                var columnExistsQuery = @"
+            SELECT COUNT(*) 
+            FROM INFORMATION_SCHEMA.COLUMNS 
+            WHERE TABLE_NAME = @tableName AND COLUMN_NAME = @columnName AND TABLE_SCHEMA = 'dbo'";
+
+                using var columnCheckCommand = new SqlCommand(columnExistsQuery, connection);
+                columnCheckCommand.Parameters.AddWithValue("@tableName", secureTableName);
+                columnCheckCommand.Parameters.AddWithValue("@columnName", columnName);
+                var columnExists = (int)await columnCheckCommand.ExecuteScalarAsync() > 0;
+
+                if (!columnExists)
+                {
+                    _logger.LogWarning("Column {ColumnName} does not exist in table {SecureTableName}", columnName, secureTableName);
+                    return false;
+                }
+
+                // 🔥 ANAHTAR DEĞİŞİKLİK: NULL olmayan ve boş string olmayan veri var mı kontrol et
+                var hasDataQuery = $@"
+            SELECT COUNT(*) 
+            FROM [{secureTableName}] 
+            WHERE [{columnName}] IS NOT NULL 
+            AND LTRIM(RTRIM(CAST([{columnName}] AS NVARCHAR(MAX)))) != ''";
+
+                using var hasDataCommand = new SqlCommand(hasDataQuery, connection);
+                var dataCount = (int)await hasDataCommand.ExecuteScalarAsync();
+
+                _logger.LogInformation("Column {ColumnName} in table {SecureTableName} has {DataCount} non-empty records",
+                    columnName, secureTableName, dataCount);
+
+                return dataCount > 0;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error checking if column {ColumnName} has data in table {TableName} for user {UserId}",
-                    columnName, tableName, userId);
-                return false;
+                _logger.LogError(ex, "Error checking if column {ColumnName} has data in table {TableName}", columnName, tableName);
+                return true; // Hata durumunda güvenli tarafta kal
             }
         }
-
         public async Task<bool> ColumnHasNullDataAsync(string tableName, string columnName, int userId)
         {
             try
             {
                 var secureTableName = GenerateSecureTableName(tableName, userId);
-                var sanitizedColumnName = SanitizeColumnName(columnName);
 
                 using var connection = new SqlConnection(_connectionString);
                 await connection.OpenAsync();
 
-                var query = $"SELECT COUNT(*) FROM [{secureTableName}] WHERE [{sanitizedColumnName}] IS NULL";
-                using var command = new SqlCommand(query, connection);
+                // NULL değerlerin sayısını kontrol et
+                var hasNullQuery = $@"
+            SELECT COUNT(*) 
+            FROM [{secureTableName}] 
+            WHERE [{columnName}] IS NULL";
 
-                var result = await command.ExecuteScalarAsync();
-                return Convert.ToInt32(result) > 0;
+                using var command = new SqlCommand(hasNullQuery, connection);
+                var nullCount = (int)await command.ExecuteScalarAsync();
+
+                _logger.LogInformation("Column {ColumnName} in table {SecureTableName} has {NullCount} NULL values",
+                    columnName, secureTableName, nullCount);
+
+                return nullCount > 0;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error checking for null data in column {ColumnName} of table {TableName} for user {UserId}",
-                    columnName, tableName, userId);
-                return false;
+                _logger.LogError(ex, "Error checking NULL data in column {ColumnName} of table {TableName}", columnName, tableName);
+                return true; // Hata durumunda güvenli tarafta kal
             }
         }
 
-        public async Task<ColumnValidationResult> ValidateColumnDataTypeChangeAsync(string tableName, string columnName, ColumnDataType currentType, ColumnDataType newType, int userId)
-        {
-            var result = new ColumnValidationResult { IsValid = true };
-
-            try
-            {
-                // Check if conversion is possible
-                if (!CanConvertDataType(currentType, newType))
-                {
-                    result.IsValid = false;
-                    result.Issues.Add($"{currentType} tipinden {newType} tipine dönüşüm desteklenmiyor");
-                    return result;
-                }
-
-                // Get row count
-                result.AffectedRowCount = await GetTableRowCountAsync(tableName, userId);
-
-                if (result.AffectedRowCount > 0)
-                {
-                    // Check for lossy conversions
-                    if (IsLossyConversion(currentType, newType))
-                    {
-                        result.HasDataCompatibilityIssues = true;
-                        result.RequiresForceUpdate = true;
-                        result.DataIssues.Add("Bu dönüşüm veri kaybına veya kesilmeye neden olabilir");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error validating column data type change for {TableName}.{ColumnName} from {CurrentType} to {NewType} for user {UserId}",
-                    tableName, columnName, currentType, newType, userId);
-                result.IsValid = false;
-                result.Issues.Add("Validasyon sırasında hata oluştu: " + ex.Message);
-            }
-
-            return result;
-        }
 
         public async Task<DDLOperationResult> CreateTableBackupAsync(string tableName, int userId)
         {
@@ -871,14 +986,14 @@ namespace TableManagement.Application.Services
         {
             return (from, to) switch
             {
-                (ColumnDataType.VARCHAR, ColumnDataType.INT) => true,
-                (ColumnDataType.VARCHAR, ColumnDataType.DECIMAL) => true,
-                (ColumnDataType.VARCHAR, ColumnDataType.DATETIME) => true,
-                (ColumnDataType.INT, ColumnDataType.VARCHAR) => true,
-                (ColumnDataType.INT, ColumnDataType.DECIMAL) => true,
-                (ColumnDataType.DECIMAL, ColumnDataType.VARCHAR) => true,
-                (ColumnDataType.DECIMAL, ColumnDataType.INT) => true,
-                (ColumnDataType.DATETIME, ColumnDataType.VARCHAR) => true,
+                (ColumnDataType.Varchar, ColumnDataType.Int) => true,
+                (ColumnDataType.Varchar, ColumnDataType.Decimal) => true,
+                (ColumnDataType.Varchar, ColumnDataType.DateTime) => true,
+                (ColumnDataType.Int, ColumnDataType.Varchar) => true,
+                (ColumnDataType.Int, ColumnDataType.Decimal) => true,
+                (ColumnDataType.Decimal, ColumnDataType.Varchar) => true,
+                (ColumnDataType.Decimal, ColumnDataType.Int) => true,
+                (ColumnDataType.DateTime, ColumnDataType.Varchar) => true,
                 _ => from == to
             };
         }
@@ -887,12 +1002,140 @@ namespace TableManagement.Application.Services
         {
             return (from, to) switch
             {
-                (ColumnDataType.VARCHAR, ColumnDataType.INT) => true,
-                (ColumnDataType.VARCHAR, ColumnDataType.DECIMAL) => true,
-                (ColumnDataType.VARCHAR, ColumnDataType.DATETIME) => true,
-                (ColumnDataType.DECIMAL, ColumnDataType.INT) => true,
+                // VARCHAR'dan diğer tiplere - içerik kontrolü gerekli
+                (ColumnDataType.Varchar, ColumnDataType.Int) => true,
+                (ColumnDataType.Varchar, ColumnDataType.Decimal) => true,
+                (ColumnDataType.Varchar, ColumnDataType.DateTime) => true,
+
+                // DECIMAL'den INT'e - ondalık kısım kontrolü gerekli
+                (ColumnDataType.Decimal, ColumnDataType.Int) => true,
+
+                // 🔥 GÜNCELLEME: INT'den DECIMAL'e - HİÇBİR ZAMAN veri kaybı olmaz
+                (ColumnDataType.Int, ColumnDataType.Decimal) => false,
+
+                // Güvenli dönüşümler
+                (ColumnDataType.Int, ColumnDataType.Varchar) => false,
+                (ColumnDataType.Decimal, ColumnDataType.Varchar) => false,
+                (ColumnDataType.DateTime, ColumnDataType.Varchar) => false,
+
+                // Aynı tip
                 _ => false
             };
+        }
+
+        private async Task<bool> HasFractionalData(SqlConnection connection, string tableName, string columnName)
+        {
+            var query = $@"
+        SELECT COUNT(*) 
+        FROM [{tableName}] 
+        WHERE [{columnName}] IS NOT NULL 
+        AND [{columnName}] != FLOOR([{columnName}])";
+
+            using var command = new SqlCommand(query, connection);
+            var fractionalCount = (int)await command.ExecuteScalarAsync();
+
+            _logger.LogInformation("Found {FractionalCount} values with fractional parts in column {ColumnName}",
+                fractionalCount, columnName);
+
+            return fractionalCount > 0;
+        }
+
+
+        private async Task<bool> HasInvalidDateData(SqlConnection connection, string tableName, string columnName)
+        {
+            var query = $@"
+        SELECT COUNT(*) 
+        FROM [{tableName}] 
+        WHERE [{columnName}] IS NOT NULL 
+        AND LTRIM(RTRIM([{columnName}])) != ''
+        AND TRY_CAST([{columnName}] AS DATETIME) IS NULL";
+
+            using var command = new SqlCommand(query, connection);
+            var invalidCount = (int)await command.ExecuteScalarAsync();
+
+            _logger.LogInformation("Found {InvalidCount} invalid DATETIME values in column {ColumnName}",
+                invalidCount, columnName);
+
+            return invalidCount > 0;
+        }
+
+
+
+        private async Task<bool> WillCauseActualDataLossAsync(
+    string tableName, string columnName, ColumnDataType currentType, ColumnDataType newType, int userId)
+        {
+            try
+            {
+                var secureTableName = GenerateSecureTableName(tableName, userId);
+
+                using var connection = new SqlConnection(_connectionString);
+                await connection.OpenAsync();
+
+                return (currentType, newType) switch
+                {
+                    // INT'den DECIMAL'e dönüşüm - HİÇBİR ZAMAN veri kaybı olmaz
+                    (ColumnDataType.Int, ColumnDataType.Decimal) => false,
+
+                    // VARCHAR'dan sayısal tiplere - geçersiz veriler var mı kontrol et
+                    (ColumnDataType.Varchar, ColumnDataType.Int) => await HasInvalidNumericData(connection, secureTableName, columnName, "Int"),
+                    (ColumnDataType.Varchar, ColumnDataType.Decimal) => await HasInvalidNumericData(connection, secureTableName, columnName, "Decimal"),
+
+                    // VARCHAR'dan DATETIME'e - geçersiz tarihler var mı kontrol et
+                    (ColumnDataType.Varchar, ColumnDataType.DateTime) => await HasInvalidDateData(connection, secureTableName, columnName),
+
+                    // DECIMAL'den INT'e - ondalık kısım kaybolacak mı kontrol et
+                    (ColumnDataType.Decimal, ColumnDataType.Int) => await HasFractionalData(connection, secureTableName, columnName),
+
+                    // Diğer durumlar
+                    _ => false
+                };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error checking actual data loss for {TableName}.{ColumnName}", tableName, columnName);
+                return true; // Hata durumunda güvenli tarafta kal
+            }
+        }
+
+        private async Task<bool> HasInvalidNumericData(SqlConnection connection, string tableName, string columnName, string targetType)
+        {
+            string query;
+
+            if (targetType == "INT")
+            {
+                // INT için: ISNUMERIC kontrolü ve integer range kontrolü
+                query = $@"
+            SELECT COUNT(*) 
+            FROM [{tableName}] 
+            WHERE [{columnName}] IS NOT NULL 
+            AND LTRIM(RTRIM([{columnName}])) != ''
+            AND (
+                ISNUMERIC([{columnName}]) = 0 
+                OR TRY_CAST([{columnName}] AS INT) IS NULL
+                OR CAST([{columnName}] AS FLOAT) > 2147483647 
+                OR CAST([{columnName}] AS FLOAT) < -2147483648
+            )";
+            }
+            else // DECIMAL
+            {
+                query = $@"
+            SELECT COUNT(*) 
+            FROM [{tableName}] 
+            WHERE [{columnName}] IS NOT NULL 
+            AND LTRIM(RTRIM([{columnName}])) != ''
+            AND (
+                ISNUMERIC([{columnName}]) = 0 
+                OR TRY_CAST([{columnName}] AS DECIMAL(18,2)) IS NULL
+            )";
+            }
+
+            using var command = new SqlCommand(query, connection);
+            var invalidCount = (int)await command.ExecuteScalarAsync();
+
+            _logger.LogInformation("Found {InvalidCount} invalid {TargetType} values in column {ColumnName}",
+                invalidCount, targetType, columnName);
+
+            return invalidCount > 0;
         }
 
 

@@ -228,14 +228,13 @@ namespace TableManagement.Application.Services
                 return false;
             }
         }
-
         public async Task<bool> RenamePhysicalTableAsync(string oldPhysicalTableName, string newLogicalTableName, int userId)
         {
             try
             {
                 var newSecureTableName = GenerateSecureTableName(newLogicalTableName, userId);
 
-                _logger.LogInformation("Attempting to rename physical table from {OldTableName} to {NewTableName} for user {UserId}",
+                _logger.LogInformation("🏷️ Attempting to rename physical table from {OldTableName} to {NewTableName} for user {UserId}",
                     oldPhysicalTableName, newSecureTableName, userId);
 
                 using var connection = new SqlConnection(_connectionString);
@@ -245,7 +244,7 @@ namespace TableManagement.Application.Services
                 var tableExists = await TableExistsAsync(oldPhysicalTableName);
                 if (!tableExists)
                 {
-                    _logger.LogWarning("Old physical table {OldTableName} does not exist for user {UserId}", oldPhysicalTableName, userId);
+                    _logger.LogWarning("⚠️ Old physical table {OldTableName} does not exist for user {UserId}", oldPhysicalTableName, userId);
                     return false;
                 }
 
@@ -253,22 +252,23 @@ namespace TableManagement.Application.Services
                 var newTableExists = await TableExistsAsync(newSecureTableName);
                 if (newTableExists)
                 {
-                    _logger.LogError("New table name {NewTableName} already exists for user {UserId}", newSecureTableName, userId);
+                    _logger.LogError("❌ New table name {NewTableName} already exists for user {UserId}", newSecureTableName, userId);
                     return false;
                 }
 
-                // Tabloyu yeniden adlandır
+                // Tabloyu yeniden adlandır - SQL Server sp_rename kullan
                 var renameQuery = $"EXEC sp_rename '[{oldPhysicalTableName}]', '{newSecureTableName}'";
                 using var command = new SqlCommand(renameQuery, connection);
                 await command.ExecuteNonQueryAsync();
 
-                _logger.LogInformation("Table successfully renamed from {OldTableName} to {NewTableName} for user {UserId}",
+                _logger.LogInformation("✅ Table successfully renamed from {OldTableName} to {NewTableName} for user {UserId}",
                     oldPhysicalTableName, newSecureTableName, userId);
+
                 return true;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error renaming physical table from {OldTableName} to {NewTableName} for user {UserId}",
+                _logger.LogError(ex, "💥 Error renaming physical table from {OldTableName} to {NewTableName} for user {UserId}",
                     oldPhysicalTableName, newLogicalTableName, userId);
                 return false;
             }
@@ -281,23 +281,25 @@ namespace TableManagement.Application.Services
                 using var connection = new SqlConnection(_connectionString);
                 await connection.OpenAsync();
 
-                var tableExistsQuery = @"
-            SELECT COUNT(*) 
+                var query = @"
+            SELECT COUNT(1) 
             FROM INFORMATION_SCHEMA.TABLES 
-            WHERE TABLE_NAME = @tableName AND TABLE_SCHEMA = 'dbo'";
+            WHERE TABLE_NAME = @tableName 
+            AND TABLE_TYPE = 'BASE TABLE'";
 
-                using var command = new SqlCommand(tableExistsQuery, connection);
+                using var command = new SqlCommand(query, connection);
                 command.Parameters.AddWithValue("@tableName", physicalTableName);
 
-                var count = (int)await command.ExecuteScalarAsync();
-                var exists = count > 0;
+                var result = await command.ExecuteScalarAsync();
+                var exists = Convert.ToInt32(result) > 0;
 
-                _logger.LogDebug("Table {TableName} exists: {Exists}", physicalTableName, exists);
+                _logger.LogDebug("Table existence check for {TableName}: {Exists}", physicalTableName, exists);
+
                 return exists;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error checking if table {TableName} exists", physicalTableName);
+                _logger.LogError(ex, "Error checking table existence for {TableName}", physicalTableName);
                 return false;
             }
         }

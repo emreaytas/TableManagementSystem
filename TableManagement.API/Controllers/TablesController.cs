@@ -1205,5 +1205,147 @@ namespace TableManagement.API.Controllers
         }
 
 
+        [HttpPost("{id}/test-rename-table")]
+        public async Task<IActionResult> TestRenameTable(int id, [FromBody] TestRenameRequest request)
+        {
+            try
+            {
+                var userId = GetCurrentUserId();
+                _logger.LogInformation("=== TESTING PHYSICAL TABLE RENAME ===");
+                _logger.LogInformation("Table ID: {TableId}, User ID: {UserId}", id, userId);
+                _logger.LogInformation("New table name: {NewTableName}", request.NewTableName);
+
+                // 1. CustomTable bilgisini al
+                var customTable = await _unitOfWork.CustomTables.GetUserTableByIdAsync(id, userId);
+                if (customTable == null)
+                {
+                    return NotFound(new { error = "CustomTable bulunamadı", tableId = id });
+                }
+
+                _logger.LogInformation("Current logical table name: {LogicalTableName}", customTable.TableName);
+
+                // 2. Mevcut fiziksel tablo ismini bul
+                var currentPhysicalTableName = await FindPhysicalTableNameForRename(customTable.TableName, userId);
+                if (string.IsNullOrEmpty(currentPhysicalTableName))
+                {
+                    return BadRequest(new { error = "Fiziksel tablo bulunamadı" });
+                }
+
+                _logger.LogInformation("Found physical table: {PhysicalTableName}", currentPhysicalTableName);
+
+                // 3. Yeni fiziksel tablo ismini oluştur
+                var newPhysicalTableName = _dataDefinitionService.GenerateSecureTableName(request.NewTableName, userId);
+                _logger.LogInformation("New physical table name will be: {NewPhysicalTableName}", newPhysicalTableName);
+
+                // 4. Fiziksel tabloyu yeniden adlandır
+                var renameResult = await _dataDefinitionService.RenamePhysicalTableAsync(
+                    currentPhysicalTableName,
+                    request.NewTableName,
+                    userId);
+
+                if (!renameResult)
+                {
+                    return BadRequest(new
+                    {
+                        error = "Fiziksel tablo ismi değiştirilemedi",
+                        currentPhysicalTableName = currentPhysicalTableName,
+                        newPhysicalTableName = newPhysicalTableName
+                    });
+                }
+
+                // 5. CustomTable'daki logical ismi de güncelle
+                customTable.TableName = request.NewTableName;
+                customTable.UpdatedAt = DateTime.UtcNow;
+                await _unitOfWork.SaveChangesAsync();
+
+                _logger.LogInformation("=== RENAME SUCCESSFUL ===");
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Tablo ismi başarıyla değiştirildi",
+                    oldLogicalName = customTable.TableName,
+                    newLogicalName = request.NewTableName,
+                    oldPhysicalName = currentPhysicalTableName,
+                    newPhysicalName = newPhysicalTableName,
+                    customTableId = id
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error testing table rename for table {TableId}", id);
+                return StatusCode(500, new
+                {
+                    error = "Tablo ismi değiştirme testi başarısız: " + ex.Message,
+                    stackTrace = ex.StackTrace
+                });
+            }
+        }
+
+        /// <summary>
+        /// Fiziksel tablo ismini bulma - rename için özel metod
+        /// </summary>
+        private async Task<string?> FindPhysicalTableNameForRename(string logicalTableName, int userId)
+        {
+            try
+            {
+                _logger.LogInformation("🔍 Searching physical table for logical name: {LogicalTableName}", logicalTableName);
+
+                // Tüm kullanıcı tablolarını al
+                var allUserTables = await _dataDefinitionService.GetAllUserTablesAsync(userId);
+
+                _logger.LogInformation("Found {Count} user tables: {Tables}",
+                    allUserTables.Count, string.Join(", ", allUserTables));
+
+                // Olası tablo isimlerini oluştur
+                var possibleNames = new List<string>
+        {
+            _dataDefinitionService.GenerateSecureTableName(logicalTableName, userId),
+            $"Table_{userId}_{logicalTableName}",
+            $"Table_{userId}_{logicalTableName.Replace(" ", "_")}",
+        };
+
+                // Türkçe karakterleri normalize et
+                var normalized = logicalTableName
+                    .Replace("ş", "s").Replace("Ş", "S")
+                    .Replace("ç", "c").Replace("Ç", "C")
+                    .Replace("ı", "i").Replace("İ", "I")
+                    .Replace("ğ", "g").Replace("Ğ", "G")
+                    .Replace("ü", "u").Replace("Ü", "U")
+                    .Replace("ö", "o").Replace("Ö", "O")
+                    .Replace(" ", "_");
+
+                possibleNames.Add($"Table_{userId}_{normalized}");
+
+                _logger.LogInformation("Possible table names: {PossibleNames}", string.Join(", ", possibleNames));
+
+                // Hangi isim gerçekte var kontrol et
+                foreach (var possibleName in possibleNames)
+                {
+                    if (allUserTables.Contains(possibleName, StringComparer.OrdinalIgnoreCase))
+                    {
+                        _logger.LogInformation("✅ Found matching physical table: {PhysicalTableName}", possibleName);
+                        return possibleName;
+                    }
+                }
+
+                _logger.LogWarning("❌ No matching physical table found for logical name: {LogicalTableName}", logicalTableName);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error finding physical table name for {LogicalTableName}", logicalTableName);
+                return null;
+            }
+        }
+
+
+
+
+    }
+
+    public class TestRenameRequest
+    {
+        public string NewTableName { get; set; } = string.Empty;
     }
 }

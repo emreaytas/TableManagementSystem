@@ -56,8 +56,9 @@ namespace TableManagement.Application.Services
     {
         public bool Success { get; set; }
         public string Message { get; set; } = string.Empty;
-        public List<string>? ExecutedQueries { get; set; }
+        public List<string> ExecutedQueries { get; set; } = new List<string>();
         public int AffectedRows { get; set; }
         public ColumnValidationResult? ValidationResult { get; set; }
     }
+
 }

@@ -8,12 +8,12 @@ namespace TableManagement.Application.DTOs.Responses
 {
     public class ColumnValidationResult
     {
-        public bool IsValid { get; set; } = true;
-        public bool HasDataCompatibilityIssues { get; set; }
-        public bool RequiresForceUpdate { get; set; }
-        public List<string> Issues { get; set; } = new();
-        public List<string> DataIssues { get; set; } = new();
-        public int AffectedRowCount { get; set; }
+        public bool HasData { get; set; }
+        public bool HasNullValues { get; set; }
+        public bool CanConvert { get; set; }
+        public string Message { get; set; } = string.Empty;
+        public List<string> Issues { get; set; } = new List<string>();
     }
+
 
 }

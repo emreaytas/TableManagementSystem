@@ -327,23 +327,24 @@ namespace TableManagement.Application.Services
             return result;
         }
 
-        // TableManagement.Application/Services/TableService.cs
-        // ValidateColumnChangesAsync metodunu güncelleyin:
-
         private async Task ValidateColumnChangesAsync(CustomTable existingTable, List<UpdateColumnRequest> newColumns, TableValidationResult result, int userId)
         {
             var existingColumns = existingTable.Columns.ToList();
 
-            // 🔥 ANAHTAR KONTROL: Tabloda gerçekten veri var mı?
-            var tableRowCount = await _dataDefinitionService.GetTableRowCountAsync(existingTable.TableName, userId);
+            _logger.LogInformation("🔍 Validating column changes - Existing: {ExistingCount}, New: {NewCount}",
+                existingColumns.Count, newColumns.Count);
 
-            _logger.LogInformation("Table {TableName} has {RowCount} rows for validation", existingTable.TableName, tableRowCount);
-
-            // Kolon silme kontrolü
+            // 🔥 KOLON SİLME KONTROLÜ - İyileştirilmiş
             var deletedColumns = existingColumns.Where(ec => !newColumns.Any(nc => nc.ColumnId == ec.Id)).ToList();
+
+            _logger.LogInformation("📋 Found {DeletedCount} columns to delete: {DeletedColumns}",
+                deletedColumns.Count, string.Join(", ", deletedColumns.Select(c => c.ColumnName)));
+
             foreach (var deletedColumn in deletedColumns)
             {
                 result.HasStructuralChanges = true;
+
+                _logger.LogInformation("🔍 Checking if column {ColumnName} has data...", deletedColumn.ColumnName);
 
                 // 🔥 AKILLI KONTROL: Bu kolonda gerçekten veri var mı?
                 var columnHasData = await _dataDefinitionService.ColumnHasDataAsync(existingTable.TableName, deletedColumn.ColumnName, userId);
@@ -352,12 +353,36 @@ namespace TableManagement.Application.Services
                 {
                     result.HasDataCompatibilityIssues = true;
                     result.RequiresForceUpdate = true;
-                    result.ColumnIssues[$"{deletedColumn.ColumnName}"] = new List<string> { "Kolonun silinmesi veri kaybına neden olacak" };
-                    _logger.LogWarning("Column {ColumnName} has data and will cause data loss if deleted", deletedColumn.ColumnName);
+                    result.ColumnIssues[$"{deletedColumn.ColumnName}"] = new List<string> { "⚠️ Kolonun silinmesi veri kaybına neden olacak" };
+                    _logger.LogWarning("⚠️ Column {ColumnName} has data and will cause data loss if deleted", deletedColumn.ColumnName);
                 }
                 else
                 {
-                    _logger.LogInformation("Column {ColumnName} has no data, deletion is safe", deletedColumn.ColumnName);
+                    // ✅ Güvenli silme - veri yok
+                    _logger.LogInformation("✅ Column {ColumnName} has no data, deletion is safe", deletedColumn.ColumnName);
+                    if (!result.ColumnIssues.ContainsKey(deletedColumn.ColumnName))
+                    {
+                        result.ColumnIssues[deletedColumn.ColumnName] = new List<string>();
+                    }
+                    result.ColumnIssues[deletedColumn.ColumnName].Add("✅ Kolon güvenle silinebilir (veri yok)");
+                }
+            }
+
+            // Tabloda hiç veri yoksa, tüm kolon silme işlemlerini güvenli yap
+            var tableRowCount = await _dataDefinitionService.GetTableRowCountAsync(existingTable.TableName, userId);
+
+            _logger.LogInformation("📊 Table {TableName} has {RowCount} rows for validation", existingTable.TableName, tableRowCount);
+
+            if (tableRowCount == 0 && deletedColumns.Any())
+            {
+                _logger.LogInformation("🆓 Table is empty, allowing all column deletions without force update");
+                result.HasDataCompatibilityIssues = false;
+                result.RequiresForceUpdate = false;
+
+                // Tüm silinecek kolonları güvenli olarak işaretle
+                foreach (var deletedColumn in deletedColumns)
+                {
+                    result.ColumnIssues[deletedColumn.ColumnName] = new List<string> { "✅ Tablo boş - kolon güvenle silinebilir" };
                 }
             }
 
@@ -374,24 +399,24 @@ namespace TableManagement.Application.Services
                     {
                         result.HasDataCompatibilityIssues = true;
                         result.RequiresForceUpdate = true;
-                        result.ColumnIssues[newColumn.ColumnName] = new List<string> { "Zorunlu kolon mevcut verilerle uyumlu değil" };
-                        _logger.LogWarning("Required column {ColumnName} without default value will conflict with existing {RowCount} rows",
+                        result.ColumnIssues[newColumn.ColumnName] = new List<string> { "⚠️ Zorunlu kolon mevcut verilerle uyumlu değil" };
+                        _logger.LogWarning("⚠️ Required column {ColumnName} without default value will conflict with existing {RowCount} rows",
                             newColumn.ColumnName, tableRowCount);
                     }
                     else
                     {
-                        _logger.LogInformation("Required column {ColumnName} is safe to add - no existing data", newColumn.ColumnName);
+                        _logger.LogInformation("✅ Required column {ColumnName} is safe to add - no existing data", newColumn.ColumnName);
                     }
                 }
             }
 
-            // Kolon değişiklik kontrolü
+            // Kolon değişiklik kontrolü - mevcut kod
             foreach (var modifiedColumn in newColumns.Where(nc => nc.ColumnId.HasValue && nc.ColumnId > 0))
             {
                 var existingColumn = existingColumns.FirstOrDefault(ec => ec.Id == modifiedColumn.ColumnId);
                 if (existingColumn == null) continue;
 
-                // 🔥 AKILLI VERİ TİPİ DEĞİŞİKLİK KONTROLÜ
+                // Veri tipi değişikliği kontrolü
                 if (existingColumn.DataType != modifiedColumn.DataType)
                 {
                     result.HasStructuralChanges = true;
@@ -403,7 +428,7 @@ namespace TableManagement.Application.Services
                     {
                         result.IsValid = false;
                         result.ColumnIssues[existingColumn.ColumnName] = validationResult.Issues;
-                        _logger.LogError("Data type change validation failed for column {ColumnName}: {Issues}",
+                        _logger.LogError("❌ Data type change validation failed for column {ColumnName}: {Issues}",
                             existingColumn.ColumnName, string.Join(", ", validationResult.Issues));
                     }
                     else if (validationResult.HasDataCompatibilityIssues)
@@ -414,22 +439,20 @@ namespace TableManagement.Application.Services
                             result.RequiresForceUpdate = true;
                         }
                         result.ColumnIssues[existingColumn.ColumnName] = validationResult.DataIssues;
-                        _logger.LogWarning("Data type change for column {ColumnName} has compatibility issues: {Issues}",
+                        _logger.LogWarning("⚠️ Data type change for column {ColumnName} has compatibility issues: {Issues}",
                             existingColumn.ColumnName, string.Join(", ", validationResult.DataIssues));
                     }
                     else
                     {
                         // 🔥 GÜVENLİ DEĞİŞİKLİK - Kullanıcıyı bilgilendir
-                        _logger.LogInformation("Data type change for column {ColumnName} from {OldType} to {NewType} is safe",
+                        _logger.LogInformation("✅ Data type change for column {ColumnName} from {OldType} to {NewType} is safe",
                             existingColumn.ColumnName, existingColumn.DataType, modifiedColumn.DataType);
 
-                        // Güvenli değişiklikleri ayrı bir listede tut
                         if (!result.ColumnIssues.ContainsKey(existingColumn.ColumnName))
                         {
                             result.ColumnIssues[existingColumn.ColumnName] = new List<string>();
                         }
 
-                        // Safe change indicator
                         var safeChangeMessage = GetSafeChangeMessage(existingColumn.DataType, modifiedColumn.DataType);
                         if (!string.IsNullOrEmpty(safeChangeMessage))
                         {
@@ -438,12 +461,11 @@ namespace TableManagement.Application.Services
                     }
                 }
 
-                // 🔥 KOLON ADI DEĞİŞİKLİK KONTROLÜ
+                // Kolon adı değişiklik kontrolü
                 if (existingColumn.ColumnName != modifiedColumn.ColumnName)
                 {
                     result.HasStructuralChanges = true;
 
-                    // Kolon adı değişikliği genelde güvenlidir ama bilgilendirme amaçlı
                     if (!result.ColumnIssues.ContainsKey(existingColumn.ColumnName))
                     {
                         result.ColumnIssues[existingColumn.ColumnName] = new List<string>();
@@ -451,12 +473,11 @@ namespace TableManagement.Application.Services
                     result.ColumnIssues[existingColumn.ColumnName].Add($"ℹ️ Kolon adı '{existingColumn.ColumnName}' → '{modifiedColumn.ColumnName}' olarak değiştirilecek");
                 }
 
-                // 🔥 ZORUNLULUK DEĞİŞİKLİK KONTROLÜ
+                // Zorunluluk değişiklik kontrolü
                 if (existingColumn.IsRequired != modifiedColumn.IsRequired)
                 {
                     if (modifiedColumn.IsRequired && !existingColumn.IsRequired)
                     {
-                        // NULL olmayan kolon zorunlu yapılıyor - veri kontrolü gerekli
                         var columnHasNullData = await _dataDefinitionService.ColumnHasNullDataAsync(existingTable.TableName, existingColumn.ColumnName, userId);
                         if (columnHasNullData && string.IsNullOrEmpty(modifiedColumn.DefaultValue))
                         {
@@ -478,14 +499,13 @@ namespace TableManagement.Application.Services
         {
             return (from, to) switch
             {
-                (ColumnDataType.INT, ColumnDataType.DECIMAL) => "INT'den DECIMAL'e güvenli dönüşüm",
-                (ColumnDataType.INT, ColumnDataType.VARCHAR) => "INT'den VARCHAR'a güvenli dönüşüm",
-                (ColumnDataType.DECIMAL, ColumnDataType.VARCHAR) => "DECIMAL'den VARCHAR'a güvenli dönüşüm",
-                (ColumnDataType.DATETIME, ColumnDataType.VARCHAR) => "DATETIME'dan VARCHAR'a güvenli dönüşüm",
+                (ColumnDataType.Int, ColumnDataType.Decimal) => "INT'den DECIMAL'e güvenli dönüşüm",
+                (ColumnDataType.Int, ColumnDataType.Varchar) => "INT'den VARCHAR'a güvenli dönüşüm",
+                (ColumnDataType.Decimal, ColumnDataType.Varchar) => "DECIMAL'den VARCHAR'a güvenli dönüşüm",
+                (ColumnDataType.DateTime, ColumnDataType.Varchar) => "DATETIME'dan VARCHAR'a güvenli dönüşüm",
                 _ => ""
             };
         }
-
 
         public async Task<TableUpdateResult> UpdateTableAsync(int tableId, UpdateTableRequest request, int userId)
         {
@@ -497,65 +517,134 @@ namespace TableManagement.Application.Services
             {
                 await _unitOfWork.BeginTransactionAsync();
 
-                // Önce CustomTables tablosundan tabloyu al
-                var table = await _unitOfWork.CustomTables.GetUserTableWithColumnsAsync(tableId, userId);
+                var table = await _unitOfWork.CustomTables.GetUserTableByIdAsync(tableId, userId);
                 if (table == null)
                 {
-                    result.Message = "Tablo CustomTables'ta bulunamadı";
+                    result.Message = "Tablo bulunamadı.";
                     return result;
                 }
 
-                var originalTableName = table.TableName;
-                _logger.LogInformation("Starting table update: ID={TableId}, Original={OriginalName}, New={NewName}",
-                    tableId, originalTableName, request.TableName);
+                _logger.LogInformation("🔄 Starting table update for table {TableName} (ID: {TableId})", table.TableName, tableId);
 
-                // 1. FIND ACTUAL PHYSICAL TABLE - Gelişmiş arama
-                var physicalTableName = await FindPhysicalTableNameAsync(originalTableName, userId);
+                var physicalTableName = await FindPhysicalTableNameAsync(table.TableName, userId);
                 if (string.IsNullOrEmpty(physicalTableName))
                 {
-                    result.Message = $"Fiziksel tablo bulunamadı. CustomTables'taki ad: {originalTableName}";
-                    _logger.LogError("Physical table not found. Available tables logged separately.");
+                    result.Message = "Fiziksel tablo bulunamadı.";
                     return result;
                 }
 
-                _logger.LogInformation("Found physical table: {PhysicalTableName}", physicalTableName);
+                var existingColumns = table.Columns.ToList();
+                var newColumns = request.Columns;
 
-                // 2. RENAME PHYSICAL TABLE IF NAME CHANGED
-                if (originalTableName != request.TableName)
+                _logger.LogInformation("📊 Column comparison - Existing: {ExistingCount}, New: {NewCount}",
+                    existingColumns.Count, newColumns.Count);
+
+                // 🔥 1. SİLİNECEK KOLONLARI BUL VE SİL
+                var columnsToDelete = existingColumns.Where(ec =>
+                    !newColumns.Any(nc => nc.ColumnId == ec.Id)).ToList();
+
+                _logger.LogInformation("🗑️ Columns to delete: {DeleteCount} -> {Columns}",
+                    columnsToDelete.Count, string.Join(", ", columnsToDelete.Select(c => c.ColumnName)));
+
+                foreach (var columnToDelete in columnsToDelete)
                 {
-                    var newPhysicalTableName = _dataDefinitionService.GenerateSecureTableName(request.TableName, userId);
+                    _logger.LogInformation("🗑️ Deleting column: {ColumnName}", columnToDelete.ColumnName);
 
-                    _logger.LogInformation("Renaming physical table: {OldName} -> {NewName}",
-                        physicalTableName, newPhysicalTableName);
+                    var deleteResult = await _dataDefinitionService.DropColumnDirectAsync(physicalTableName, columnToDelete.ColumnName);
 
-                    var renameResult = await _dataDefinitionService.RenamePhysicalTableDirectAsync(
-                        physicalTableName, newPhysicalTableName);
-
-                    if (!renameResult)
+                    if (deleteResult.Success)
                     {
-                        result.Message = $"Fiziksel tablo yeniden adlandırılamadı: {physicalTableName} -> {newPhysicalTableName}";
-                        return result;
+                        executedQueries.Add($"DROP COLUMN {columnToDelete.ColumnName}");
+                        table.Columns.Remove(columnToDelete);
+                        _logger.LogInformation("✅ Column {ColumnName} deleted successfully", columnToDelete.ColumnName);
                     }
-
-                    executedQueries.Add($"Physical table renamed: {physicalTableName} -> {newPhysicalTableName}");
-                    physicalTableName = newPhysicalTableName; // Update reference
-                }
-
-                // 3. UPDATE COLUMN STRUCTURE
-                if (request.Columns != null && request.Columns.Any())
-                {
-                    var columnUpdateResult = await UpdateTableColumnsAsync(table, request.Columns, userId, physicalTableName);
-                    executedQueries.AddRange(columnUpdateResult.ExecutedQueries);
-                    totalAffectedRows += columnUpdateResult.AffectedRows;
-
-                    if (!columnUpdateResult.Success)
+                    else
                     {
-                        result.Message = "Kolon güncellemesinde hata: " + columnUpdateResult.Message;
-                        return result;
+                        _logger.LogError("❌ Failed to delete column {ColumnName}: {Message}",
+                            columnToDelete.ColumnName, deleteResult.Message);
+                        throw new Exception($"Kolon silme başarısız: {deleteResult.Message}");
                     }
                 }
 
-                // 4. UPDATE METADATA
+                // 2. YENİ KOLONLARI EKLE
+                var newColumnRequests = newColumns.Where(nc =>
+                    nc.ColumnId == null || nc.ColumnId == 0 ||
+                    !existingColumns.Any(ec => ec.Id == nc.ColumnId)).ToList();
+
+                foreach (var newColumn in newColumnRequests)
+                {
+                    _logger.LogInformation("➕ Adding new column: {ColumnName}", newColumn.ColumnName);
+                    var addResult = await _dataDefinitionService.AddColumnDirectAsync(physicalTableName, newColumn);
+
+                    if (addResult.Success)
+                    {
+                        executedQueries.Add($"ADD COLUMN {newColumn.ColumnName}");
+
+                        var newColumnEntity = new CustomColumn
+                        {
+                            ColumnName = newColumn.ColumnName,
+                            DataType = newColumn.DataType,
+                            IsRequired = newColumn.IsRequired,
+                            DisplayOrder = newColumn.DisplayOrder,
+                            DefaultValue = newColumn.DefaultValue,
+                            CustomTableId = table.Id,
+                            CreatedAt = DateTime.UtcNow,
+                            UpdatedAt = DateTime.UtcNow
+                        };
+
+                        table.Columns.Add(newColumnEntity);
+                        _logger.LogInformation("✅ Column {ColumnName} added successfully", newColumn.ColumnName);
+                    }
+                    else
+                    {
+                        _logger.LogError("❌ Failed to add column {ColumnName}: {Message}",
+                            newColumn.ColumnName, addResult.Message);
+                        throw new Exception($"Kolon ekleme başarısız: {addResult.Message}");
+                    }
+                }
+
+                // 3. MEVCUT KOLONLARI GÜNCELLE
+                var columnsToUpdate = newColumns.Where(nc =>
+                    nc.ColumnId.HasValue && nc.ColumnId > 0 &&
+                    existingColumns.Any(ec => ec.Id == nc.ColumnId)).ToList();
+
+                foreach (var updateRequest in columnsToUpdate)
+                {
+                    var existingColumn = existingColumns.First(ec => ec.Id == updateRequest.ColumnId);
+
+                    if (existingColumn.ColumnName != updateRequest.ColumnName ||
+                        existingColumn.DataType != updateRequest.DataType ||
+                        existingColumn.IsRequired != updateRequest.IsRequired ||
+                        existingColumn.DefaultValue != updateRequest.DefaultValue)
+                    {
+                        _logger.LogInformation("🔧 Updating column: {OldName} -> {NewName}",
+                            existingColumn.ColumnName, updateRequest.ColumnName);
+
+                        var updateResult = await _dataDefinitionService.UpdateColumnAsync(
+                            table.TableName, existingColumn, updateRequest, userId);
+
+                        if (updateResult.Success)
+                        {
+                            executedQueries.AddRange(updateResult.ExecutedQueries ?? new List<string>());
+
+                            existingColumn.ColumnName = updateRequest.ColumnName;
+                            existingColumn.DataType = updateRequest.DataType;
+                            existingColumn.IsRequired = updateRequest.IsRequired;
+                            existingColumn.DisplayOrder = updateRequest.DisplayOrder;
+                            existingColumn.DefaultValue = updateRequest.DefaultValue;
+                            existingColumn.UpdatedAt = DateTime.UtcNow;
+                            _logger.LogInformation("✅ Column {ColumnName} updated successfully", updateRequest.ColumnName);
+                        }
+                        else
+                        {
+                            _logger.LogError("❌ Failed to update column {ColumnName}: {Message}",
+                                existingColumn.ColumnName, updateResult.Message);
+                            throw new Exception($"Kolon güncelleme başarısız: {updateResult.Message}");
+                        }
+                    }
+                }
+
+                // 4. TABLO BİLGİLERİNİ GÜNCELLE
                 table.TableName = request.TableName;
                 table.Description = request.Description;
                 table.UpdatedAt = DateTime.UtcNow;
@@ -569,12 +658,13 @@ namespace TableManagement.Application.Services
                 result.ExecutedQueries = executedQueries;
                 result.AffectedRows = totalAffectedRows;
 
-                _logger.LogInformation("Table {TableId} updated successfully by user {UserId}", tableId, userId);
+                _logger.LogInformation("🎉 Table {TableId} updated successfully by user {UserId}. Executed {QueryCount} operations",
+                    tableId, userId, executedQueries.Count);
             }
             catch (Exception ex)
             {
                 await _unitOfWork.RollbackTransactionAsync();
-                _logger.LogError(ex, "Error updating table {TableId} by user {UserId}", tableId, userId);
+                _logger.LogError(ex, "💥 Error updating table {TableId} by user {UserId}", tableId, userId);
                 result.Message = "Tablo güncellenirken hata oluştu: " + ex.Message;
             }
 

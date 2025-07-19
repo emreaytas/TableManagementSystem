@@ -1107,6 +1107,103 @@ namespace TableManagement.API.Controllers
             }
         }
 
+        [HttpPost("{id}/debug-update")]
+        public async Task<IActionResult> DebugTableUpdate(int id, [FromBody] UpdateTableRequest request)
+        {
+            try
+            {
+                var userId = GetCurrentUserId();
+                _logger.LogInformation("🔍 DEBUG: Starting debug table update for {TableId} by user {UserId}", id, userId);
+
+                // Mevcut tabloyu al
+                var existingTable = await _unitOfWork.CustomTables.GetUserTableByIdAsync(id, userId);
+                if (existingTable == null)
+                {
+                    return NotFound(new { message = "Tablo bulunamadı." });
+                }
+
+                var existingColumns = existingTable.Columns.ToList();
+                var newColumns = request.Columns;
+
+                _logger.LogInformation("🔍 DEBUG: Table {TableName} analysis:", existingTable.TableName);
+                _logger.LogInformation("🔍 DEBUG: Existing columns: {Count}", existingColumns.Count);
+                foreach (var col in existingColumns)
+                {
+                    _logger.LogInformation("🔍 DEBUG: Existing - ID: {Id}, Name: {Name}", col.Id, col.ColumnName);
+                }
+
+                _logger.LogInformation("🔍 DEBUG: New columns from request: {Count}", newColumns.Count);
+                foreach (var col in newColumns)
+                {
+                    _logger.LogInformation("🔍 DEBUG: New - ColumnId: {ColumnId}, Name: {Name}", col.ColumnId, col.ColumnName);
+                }
+
+                // Silinecek kolonları bul
+                var columnsToDelete = existingColumns.Where(ec => !newColumns.Any(nc => nc.ColumnId == ec.Id)).ToList();
+                _logger.LogInformation("🔍 DEBUG: Columns to delete: {Count}", columnsToDelete.Count);
+                foreach (var col in columnsToDelete)
+                {
+                    _logger.LogInformation("🔍 DEBUG: Will delete - ID: {Id}, Name: {Name}", col.Id, col.ColumnName);
+                }
+
+                // Yeni kolonları bul
+                var newColumnRequests = newColumns.Where(nc => nc.ColumnId == null || nc.ColumnId == 0).ToList();
+                _logger.LogInformation("🔍 DEBUG: New columns to add: {Count}", newColumnRequests.Count);
+                foreach (var col in newColumnRequests)
+                {
+                    _logger.LogInformation("🔍 DEBUG: Will add - Name: {Name}", col.ColumnName);
+                }
+
+                // Güncellenecek kolonları bul
+                var columnsToUpdate = newColumns.Where(nc => nc.ColumnId.HasValue && nc.ColumnId > 0 && existingColumns.Any(ec => ec.Id == nc.ColumnId)).ToList();
+                _logger.LogInformation("🔍 DEBUG: Columns to update: {Count}", columnsToUpdate.Count);
+                foreach (var col in columnsToUpdate)
+                {
+                    _logger.LogInformation("🔍 DEBUG: Will update - ColumnId: {ColumnId}, Name: {Name}", col.ColumnId, col.ColumnName);
+                }
+
+                // Tablo veri kontrolü
+                var rowCount = await _dataDefinitionService.GetTableRowCountAsync(existingTable.TableName, userId);
+                _logger.LogInformation("🔍 DEBUG: Table has {RowCount} rows", rowCount);
+
+                // Her silinecek kolon için veri kontrolü
+                var columnDataStatus = new Dictionary<string, object>();
+                foreach (var deletedColumn in columnsToDelete)
+                {
+                    var hasData = await _dataDefinitionService.ColumnHasDataAsync(existingTable.TableName, deletedColumn.ColumnName, userId);
+                    columnDataStatus[deletedColumn.ColumnName] = new
+                    {
+                        HasData = hasData,
+                        ColumnId = deletedColumn.Id,
+                        CanSafelyDelete = !hasData
+                    };
+                    _logger.LogInformation("🔍 DEBUG: Column {ColumnName} has data: {HasData}", deletedColumn.ColumnName, hasData);
+                }
+
+                return Ok(new
+                {
+                    success = true,
+                    debug = new
+                    {
+                        tableId = id,
+                        tableName = existingTable.TableName,
+                        tableRowCount = rowCount,
+                        existingColumns = existingColumns.Select(c => new { c.Id, c.ColumnName }),
+                        newColumns = newColumns.Select(c => new { c.ColumnId, c.ColumnName }),
+                        columnsToDelete = columnsToDelete.Select(c => new { c.Id, c.ColumnName }),
+                        newColumnsToAdd = newColumnRequests.Select(c => new { c.ColumnName }),
+                        columnsToUpdate = columnsToUpdate.Select(c => new { c.ColumnId, c.ColumnName }),
+                        columnDataStatus = columnDataStatus
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "🔍 DEBUG: Error in debug table update for {TableId}", id);
+                return StatusCode(500, new { success = false, error = ex.Message });
+            }
+        }
+
 
     }
 }

@@ -189,6 +189,7 @@ namespace TableManagement.Infrastructure.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                
                 name: "CustomColumns",
                 columns: table => new
                 {
@@ -204,6 +205,7 @@ namespace TableManagement.Infrastructure.Migrations
                     UpdatedAt = table.Column<DateTime>(type: "datetime2", nullable: true),
                     IsDeleted = table.Column<bool>(type: "bit", nullable: false)
                 },
+
                 constraints: table =>
                 {
                     table.PrimaryKey("PK_CustomColumns", x => x.Id);
@@ -214,6 +216,7 @@ namespace TableManagement.Infrastructure.Migrations
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
                 });
+
 
             migrationBuilder.CreateTable(
                 name: "CustomTableData",

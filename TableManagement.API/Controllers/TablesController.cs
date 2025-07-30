@@ -4,8 +4,7 @@ using System.Security.Claims;
 using TableManagement.Application.DTOs.Requests;
 using TableManagement.Application.Services;
 using TableManagement.Core.DTOs.Requests;
-using TableManagement.Core.Entities;
-using TableManagement.Core.Enums;
+
 using TableManagement.Core.Interfaces;
 
 namespace TableManagement.API.Controllers
@@ -29,6 +28,7 @@ namespace TableManagement.API.Controllers
             _logger = logger;
             _unitOfWork = unitOfWork;   
         }
+
 
         private int GetCurrentUserId()
         {
@@ -762,15 +762,18 @@ namespace TableManagement.API.Controllers
             }
             catch (ArgumentException ex)
             {
+
                 _logger.LogWarning("Table {TableId} not found for user {UserId}: {Message}", id, GetCurrentUserId(), ex.Message);
                 return NotFound(new
                 {
                     success = false,
                     message = ex.Message
                 });
+            
             }
             catch (Exception ex)
             {
+
                 _logger.LogError(ex, "Error getting data for table {TableId} for user {UserId}", id, GetCurrentUserId());
                 return StatusCode(500, new
                 {
@@ -1338,7 +1341,6 @@ namespace TableManagement.API.Controllers
                 return null;
             }
         }
-
 
 
 

@@ -27,7 +27,7 @@ namespace TableManagement.Core.Entities
         [Required]
         public int CustomTableId { get; set; }
 
-        // Navigation Properties
         public virtual CustomTable? CustomTable { get; set; }
+
     }
 }

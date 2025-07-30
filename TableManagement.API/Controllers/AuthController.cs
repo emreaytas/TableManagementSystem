@@ -125,9 +125,9 @@ namespace TableManagement.API.Controllers
             }
         }
 
-        /// <summary>
-        /// Kullanıcı giriş işlemi
-        /// </summary>
+
+
+
         [HttpPost("login")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status401Unauthorized)]
@@ -138,21 +138,18 @@ namespace TableManagement.API.Controllers
             {
                 _logger.LogInformation($"Login attempt for username: {request?.UserName}");
 
-                // Input validation
                 if (request == null)
                 {
                     _logger.LogWarning("Login request is null");
                     return BadRequest(new { success = false, message = "Geçersiz giriş verisi." });
                 }
 
-                // Log the incoming request for debugging
                 _logger.LogInformation($"Login request data: UserName='{request.UserName}', PasswordLength={request.Password?.Length ?? 0}");
 
                 if (!ModelState.IsValid)
                 {
                     _logger.LogWarning("Login ModelState is invalid");
 
-                    // Log specific validation errors
                     foreach (var error in ModelState)
                     {
                         foreach (var subError in error.Value.Errors)
@@ -212,9 +209,8 @@ namespace TableManagement.API.Controllers
             }
         }
 
-        /// <summary>
-        /// Bir kullanıcı adının sistemde kayıtlı olup olmadığını kontrol eder
-        /// </summary>
+
+
         [HttpGet("check-username/{username}")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         public async Task<IActionResult> CheckUsername(string username)
@@ -238,9 +234,8 @@ namespace TableManagement.API.Controllers
             }
         }
 
-        /// <summary>
-        /// Bir email adresinin sistemde kayıtlı olup olmadığını kontrol eder
-        /// </summary>
+
+
         [HttpGet("check-email/{email}")]
         [ProducesResponseType(StatusCodes.Status200OK)]
         public async Task<IActionResult> CheckEmail(string email)
@@ -274,7 +269,6 @@ namespace TableManagement.API.Controllers
                 _logger.LogInformation($"Raw token: {token}");
                 _logger.LogInformation($"Raw email: {email}");
 
-                // URL decode işlemleri
                 var decodedToken = Uri.UnescapeDataString(token ?? "");
                 var decodedEmail = Uri.UnescapeDataString(email ?? "");
 
@@ -288,7 +282,6 @@ namespace TableManagement.API.Controllers
                     return Redirect($"{errorUrl}/auth?error=invalid-confirmation-link");
                 }
 
-                // Email doğrulama işlemini gerçekleştir
                 var result = await _authService.ConfirmEmailAsync(decodedToken, decodedEmail);
 
                 _logger.LogInformation($"Email confirmation result: Success={result.Success}, Message={result.Message}");
@@ -302,7 +295,6 @@ namespace TableManagement.API.Controllers
                     return Redirect(redirectUrl);
                 }
 
-                // Hata durumunda
                 var errorFrontendUrl = _configuration["FrontendSettings:BaseUrl"] ?? "http://localhost:5173";
                 var errorRedirectUrl = $"{errorFrontendUrl}/auth?verified=false&error={Uri.EscapeDataString(result.Message)}";
                 _logger.LogWarning($"Email confirmation failed, redirecting to: {errorRedirectUrl}");

@@ -1,4 +1,5 @@
 ﻿using AutoMapper;
+using TableManagement.Application.DTOs.Requests;
 using TableManagement.Application.DTOs.Responses;
 using TableManagement.Core.DTOs.Requests;
 using TableManagement.Core.Entities;
@@ -7,6 +8,9 @@ namespace TableManagement.Application.Mappings
 {
     public class AutoMapperProfile : Profile
     {
+
+
+
         public AutoMapperProfile()
         {
        

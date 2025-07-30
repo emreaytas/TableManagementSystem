@@ -15,6 +15,8 @@ namespace TableManagement.Infrastructure.Data
     {
         public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options)
         {
+
+
         }
 
         public DbSet<CustomTable> CustomTables { get; set; }

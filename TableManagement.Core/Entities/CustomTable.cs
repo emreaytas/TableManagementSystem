@@ -20,8 +20,13 @@ namespace TableManagement.Core.Entities
         public int UserId { get; set; }
 
         // Navigation Properties
-        public virtual User User { get; set; } = null!;
+        public virtual User User { get; set; } = null!;                        
         public virtual ICollection<CustomColumn> Columns { get; set; } = new List<CustomColumn>();
         public virtual ICollection<CustomTableData> TableData { get; set; } = new List<CustomTableData>();
+
+
+        
+
+
     }
 }

@@ -117,10 +117,8 @@ namespace TableManagement.API.Controllers
                 var userId = GetCurrentUserId();
                 _logger.LogInformation("Getting DevExpress tables for user {UserId}", userId);
 
-                // UnitOfWork kullanarak veriyi al
                 var tables = await _tableService.GetUserTablesForDevExpressAsync(userId);
 
-                // DevExpress DataSourceLoader ile client-side processing
                 var result = DataSourceLoader.Load(tables, loadOptions);
 
                 _logger.LogInformation("Retrieved {Count} tables for user {UserId}",

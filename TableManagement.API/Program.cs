@@ -203,7 +203,8 @@ try
         });
     });
 
-    // HTTP Logging (ek loglama için)
+
+
     builder.Services.AddHttpLogging(logging =>
     {
         logging.LoggingFields = Microsoft.AspNetCore.HttpLogging.HttpLoggingFields.All;
@@ -214,6 +215,7 @@ try
         logging.RequestBodyLogLimit = 4096;
         logging.ResponseBodyLogLimit = 4096;
     });
+    builder.Services.AddScoped<IExcelService, ExcelService>();
 
     var app = builder.Build();
 

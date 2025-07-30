@@ -15,7 +15,7 @@ namespace TableManagement.Core.Entities
         public string ColumnName { get; set; } = string.Empty;
 
         [Required]
-        public ColumnDataType DataType { get; set; } // Enum kullanıyoruz
+        public ColumnDataType DataType { get; set; } 
 
         public bool IsRequired { get; set; } = false; // Nullable kolonlar için false olarak başlatıyoruz
 

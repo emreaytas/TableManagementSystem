@@ -6,6 +6,10 @@ using TableManagement.Application.Services;
 using TableManagement.Core.DTOs.Requests;
 
 using TableManagement.Core.Interfaces;
+using DevExtreme.AspNet.Data;
+using DevExtreme.AspNet.Data.ResponseModel;
+
+
 
 namespace TableManagement.API.Controllers
 {
@@ -36,11 +40,6 @@ namespace TableManagement.API.Controllers
         }
 
 
-        // TablesController.cs içine eklenecek metodlar
-
-        /// <summary>
-        /// Fiziksel tablo durumunu debug eder
-        /// </summary>
         [HttpGet("{id}/debug-physical-table")]
         public async Task<IActionResult> DebugPhysicalTable(int id)
         {
@@ -49,14 +48,11 @@ namespace TableManagement.API.Controllers
                 var userId = GetCurrentUserId();
                 _logger.LogInformation("=== DEBUG PHYSICAL TABLE FOR ID: {TableId} ===", id);
 
-                // 1. CustomTables'tan bilgiyi al
                 var customTable = await _unitOfWork.CustomTables.GetUserTableByIdAsync(id, userId);
 
-                // 2. Fiziksel tabloları al
                 var allUserTables = await _dataDefinitionService.GetAllUserTablesAsync(userId);
                 var allSystemTables = await _dataDefinitionService.GetAllTablesDebugAsync();
 
-                // 3. Olası tablo isimlerini oluştur
                 var possibleNames = new List<string>();
                 if (customTable != null)
                 {
@@ -113,9 +109,37 @@ namespace TableManagement.API.Controllers
             }
         }
 
-        /// <summary>
-        /// Fiziksel tabloyu yeniden oluşturur
-        /// </summary>
+        [HttpGet]
+        public async Task<IActionResult> GetUserTables([FromQuery] DataSourceLoadOptionsBase loadOptions)
+        {
+            try
+            {
+                var userId = GetCurrentUserId();
+                _logger.LogInformation("Getting DevExpress tables for user {UserId}", userId);
+
+                // UnitOfWork kullanarak veriyi al
+                var tables = await _tableService.GetUserTablesForDevExpressAsync(userId);
+
+                // DevExpress DataSourceLoader ile client-side processing
+                var result = DataSourceLoader.Load(tables, loadOptions);
+
+                _logger.LogInformation("Retrieved {Count} tables for user {UserId}",
+                    tables.Count(), userId);
+
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting DevExpress tables for user {UserId}", GetCurrentUserId());
+                return StatusCode(500, new
+                {
+                    success = false,
+                    message = "Tablolar getirilirken bir hata oluştu.",
+                    error = ex.Message
+                });
+            }
+        }
+
         [HttpPost("{id}/recreate-physical-table")]
         public async Task<IActionResult> RecreatePhysicalTable(int id)
         {
@@ -210,9 +234,7 @@ namespace TableManagement.API.Controllers
             }
         }
 
-        /// <summary>
-        /// Fiziksel tabloyu siler (temizlik için)
-        /// </summary>
+ 
         [HttpDelete("{id}/delete-physical-table")]
         public async Task<IActionResult> DeletePhysicalTable(int id)
         {
@@ -288,9 +310,7 @@ namespace TableManagement.API.Controllers
             }
         }
 
-        /// <summary>
-        /// Validasyon ile birlikte yeni tablo oluşturur
-        /// </summary>
+  
         [HttpPost("create-with-validation")]
         public async Task<IActionResult> CreateTableWithValidation([FromBody] CreateTableRequest request)
         {
@@ -335,19 +355,16 @@ namespace TableManagement.API.Controllers
             }
         }
 
-        /// <summary>
-        /// Giriş yapmış kullanıcının tüm tablolarını listeler
-        /// </summary>
-        [HttpGet]
-        public async Task<IActionResult> GetUserTables()
+
+  
+
+        [HttpGet("legacy")]
+        public async Task<IActionResult> GetUserTablesLegacy()
         {
             try
             {
                 var userId = GetCurrentUserId();
-                _logger.LogInformation("Getting tables for user {UserId}", userId);
-
                 var tables = await _tableService.GetUserTablesAsync(userId);
-
                 return Ok(new
                 {
                     success = true,
@@ -357,7 +374,7 @@ namespace TableManagement.API.Controllers
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error getting tables for user {UserId}", GetCurrentUserId());
+                _logger.LogError(ex, "Error getting legacy tables");
                 return StatusCode(500, new
                 {
                     success = false,
@@ -366,9 +383,7 @@ namespace TableManagement.API.Controllers
             }
         }
 
-        /// <summary>
-        /// Belirtilen tabloyu getirir
-        /// </summary>
+
         [HttpGet("{id}")]
         public async Task<IActionResult> GetTableById(int id)
         {

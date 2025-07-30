@@ -1,11 +1,16 @@
 ﻿using AutoMapper;
+using DevExtreme.AspNet.Data;
+using DevExtreme.AspNet.Data.ResponseModel;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using System.IO.Pipelines;
 using TableManagement.Application.DTOs.Requests;
 using TableManagement.Application.DTOs.Responses;
 using TableManagement.Core.DTOs.Requests;
 using TableManagement.Core.Entities;
-using TableManagement.Core.Interfaces;
 using TableManagement.Core.Enums;
-using Microsoft.Extensions.Logging;
+using TableManagement.Core.Interfaces;
+using TableManagement.Infrastructure.Data;
 
 namespace TableManagement.Application.Services
 {
@@ -19,21 +24,81 @@ namespace TableManagement.Application.Services
         private readonly IMapper _mapper;
         private readonly IDataDefinitionService _dataDefinitionService;
         private readonly ILogger<TableService> _logger;
-
+        private readonly ApplicationDbContext _context;
         public TableService(
             IUnitOfWork unitOfWork,
             IMapper mapper,
             IDataDefinitionService dataDefinitionService,
-            ILogger<TableService> logger)
+            ILogger<TableService> logger, ApplicationDbContext context)
         {
             _unitOfWork = unitOfWork;
             _mapper = mapper;
             _dataDefinitionService = dataDefinitionService;
             _logger = logger;
+            _context = context;
+        }
+
+        public async Task<IEnumerable<TableListDto>> GetUserTablesForDevExpressAsync(int userId)
+        {
+            _logger.LogInformation("Getting DevExpress tables for user {UserId}", userId);
+
+            // UnitOfWork kullanarak veriyi al
+            var tables = await _unitOfWork.CustomTables.GetUserTablesAsync(userId);
+
+            // Manuel mapping yap
+            var result = tables.Select(t => new TableListDto
+            {
+                Id = t.Id,
+                TableName = t.TableName,
+                Description = t.Description ?? "",
+                CreatedAt = t.CreatedAt,
+                UpdatedAt = t.UpdatedAt,
+                ColumnCount = t.Columns?.Count() ?? 0,
+                FormattedDate = t.CreatedAt.ToString("dd.MM.yyyy HH:mm"),
+                StatusBadge = (t.Columns?.Count() ?? 0) <= 3 ? "Basit" :
+                             (t.Columns?.Count() ?? 0) <= 6 ? "Orta" : "Karmaşık",
+                StatusColor = (t.Columns?.Count() ?? 0) <= 3 ? "orange" :
+                             (t.Columns?.Count() ?? 0) <= 6 ? "green" : "blue",
+                Columns = t.Columns?.Select(c => new ColumnSummaryDto
+                {
+                    Id = c.Id,
+                    ColumnName = c.ColumnName,
+                    DataType = (int)c.DataType,
+                    IsRequired = c.IsRequired,
+                    DefaultValue = c.DefaultValue ?? "",
+                    DataTypeLabel = GetDataTypeLabel((int)c.DataType),
+                    DataTypeColor = GetDataTypeColor((int)c.DataType)
+                }).ToList() ?? new List<ColumnSummaryDto>()
+            }).ToList();
+
+            _logger.LogInformation("Created {Count} TableListDto for user {UserId}", result.Count, userId);
+            return result;
         }
 
 
+        private static string GetDataTypeLabel(int dataType)
+        {
+            return dataType switch
+            {
+                1 => "VARCHAR",
+                2 => "INT",
+                3 => "DECIMAL",
+                4 => "DATETIME",
+                _ => "UNKNOWN"
+            };
+        }
 
+        private static string GetDataTypeColor(int dataType)
+        {
+            return dataType switch
+            {
+                1 => "blue",
+                2 => "green",
+                3 => "orange",
+                4 => "purple",
+                _ => "grey"
+            };
+        }
 
         public async Task<TableResponse> CreateTableAsync(CreateTableRequest request, int userId)
         {

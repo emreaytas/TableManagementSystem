@@ -2,6 +2,7 @@
 using TableManagement.Application.DTOs.Requests;
 using TableManagement.Application.DTOs.Responses;
 using TableManagement.Core.DTOs.Requests;
+using TableManagement.Core.Entities;
 
 namespace TableManagement.Application.Services
 {
@@ -14,6 +15,6 @@ namespace TableManagement.Application.Services
         string GenerateJwtToken(int userId, string userName, string email);
 
         Task<ServiceResponse> DeleteUserAsync(int Id);
-
+        Task<int> GetCurrentUserId();
     }
 }

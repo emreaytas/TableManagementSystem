@@ -14,9 +14,11 @@ using TableManagement.Core.DTOs.Requests;
 using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authorization;
 
 namespace TableManagement.Application.Services
 {
+
     public class AuthService : IAuthService
     {
         private readonly UserManager<User> _userManager;
@@ -430,6 +432,8 @@ namespace TableManagement.Application.Services
 
 
 
+
+
         public async Task<AuthResponse> ResendEmailConfirmationAsync(string email)
         {
             try
@@ -479,6 +483,11 @@ namespace TableManagement.Application.Services
                 _logger.LogError(ex, "Resend email confirmation error occurred");
                 return new AuthResponse { Success = false, Message = "Email gönderme sırasında bir hata oluştu." };
             }
+        }
+
+        public Task<int> GetCurrentUserId() // tamamlanacak.
+        {
+            throw new NotImplementedException();
         }
     }
 }

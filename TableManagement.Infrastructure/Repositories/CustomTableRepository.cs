@@ -19,7 +19,15 @@ namespace TableManagement.Infrastructure.Repositories
                 .OrderByDescending(t => t.CreatedAt)
                 .ToListAsync();
         }
-
+        public async Task<IEnumerable<CustomTable>> GetUserTablesWithColumnsAsync(int userId)
+        {
+            return await _dbSet
+                .Where(t => t.UserId == userId)
+                .Include(t => t.Columns)
+                .OrderByDescending(t => t.CreatedAt)
+                .AsNoTracking() // Performance için
+                .ToListAsync();
+        }
         public async Task<CustomTable?> GetUserTableByIdAsync(int tableId, int userId)
         {
             return await _context.CustomTables
@@ -33,14 +41,7 @@ namespace TableManagement.Infrastructure.Repositories
                 .AnyAsync(t => t.TableName == tableName && t.UserId == userId);
         }
 
-        public async Task<IEnumerable<CustomTable>> GetUserTablesWithColumnsAsync(int userId)
-        {
-            return await _context.CustomTables
-                .Include(t => t.Columns.OrderBy(c => c.DisplayOrder))
-                .Where(t => t.UserId == userId)
-                .OrderByDescending(t => t.CreatedAt)
-                .ToListAsync();
-        }
+
 
         public async Task<CustomTable?> GetUserTableWithColumnsAsync(int tableId, int userId)
         {

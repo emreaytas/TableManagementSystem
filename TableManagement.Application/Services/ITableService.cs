@@ -1,41 +1,54 @@
-﻿using TableManagement.Application.DTOs.Requests;
+﻿using DevExtreme.AspNet.Data.ResponseModel;
+using System.IO.Pipelines;
+using TableManagement.Application.DTOs.Requests;
 using TableManagement.Application.DTOs.Responses;
 using TableManagement.Core.DTOs.Requests;
+using DevExtreme.AspNet.Data.ResponseModel;
 
 namespace TableManagement.Application.Services
 {
     public interface ITableService
     {
-        // Existing table methods
         Task<TableResponse> CreateTableAsync(CreateTableRequest request, int userId);
         Task<IEnumerable<TableResponse>> GetUserTablesAsync(int userId);
         Task<TableResponse> GetTableByIdAsync(int tableId, int userId);
         Task<bool> DeleteTableAsync(int tableId, int userId);
 
-        // Table data methods - YENİ column name bazlı
         Task<TableDataResponse> GetTableDataAsync(int tableId, int userId);
         Task<bool> AddTableDataAsync(AddTableDataRequest request, int userId);
 
-        // YENİ: Column name bazlı güncelleme
         Task<bool> UpdateTableDataAsync(UpdateTableDataRequest request, int userId);
 
-        // Silme metodu (aynı kaldı)
         Task<bool> DeleteTableDataAsync(int tableId, int rowIdentifier, int userId);
 
-        // Backward compatibility için ID bazlı metodlar
         Task<bool> AddTableDataByIdAsync(AddTableDataByIdRequest request, int userId);
         Task<bool> UpdateTableDataByIdAsync(int tableId, int rowIdentifier, Dictionary<int, string> values, int userId);
 
-        // Column update methods
         Task<ColumnUpdateResult> UpdateColumnAsync(int tableId, UpdateColumnRequest request, int userId);
         Task<ColumnValidationResult> ValidateColumnUpdateAsync(int tableId, UpdateColumnRequest request, int userId);
 
-        // New table update methods for the enhanced system
         Task<TableValidationResult> ValidateTableUpdateAsync(int tableId, ValidateTableUpdateRequest request, int userId);
+        
+        
         Task<TableUpdateResult> UpdateTableAsync(int tableId, UpdateTableRequest request, int userId);
+        
+        
         Task<TableCreateResult> CreateTableWithValidationAsync(CreateTableRequest request, int userId);
+
+
+
+        // kullanıcıya ait tabloları DevExpress için listele. sonra front için güncelleme gelecek unutma emmi.
+        Task<IEnumerable<TableListDto>> GetUserTablesForDevExpressAsync(int userId);
+
+
+
+        
+
+
+
     }
-    // Result classes for the interface
+
+
     public class ColumnUpdateResult
     {
         public bool Success { get; set; }

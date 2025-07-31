@@ -722,18 +722,40 @@ namespace TableManagement.API.Controllers
                 var response = new
                 {
                     success = true,
-                    message = updateResult.Message,
-                    table = updateResult.Table,
+                    message = hasForceUpdatePermission ?
+               "Tablo zorla güncellendi. Uyumsuz veriler temizlendi." :
+               updateResult.Message,
+
+                    // 🔥 CIRCULAR REFERENCE SORUNU: table entity'sini döndürme!
+                    // table = updateResult.Table,  // ← BU SATIRI SİL
+
+                    // 🔥 Bunun yerine basit bilgiler döndür:
+                    tableInfo = new
+                    {
+                        id = id,
+                        name = request.TableName,
+                        description = request.Description,
+                        columnCount = request.Columns?.Count ?? 0
+                    },
+
                     executedQueries = updateResult.ExecutedQueries,
                     affectedRows = updateResult.AffectedRows,
                     validationResult = new
                     {
                         safeChanges = safeChanges,
                         warningChanges = warningChanges,
+              
                         columnIssues = validationResult.ColumnIssues,
                         hasStructuralChanges = validationResult.HasStructuralChanges,
-                        hasDataCompatibilityIssues = validationResult.HasDataCompatibilityIssues
-                    }
+                        hasDataCompatibilityIssues = validationResult.HasDataCompatibilityIssues,
+                        forceUpdateWasUsed = hasForceUpdatePermission
+                    },
+                    postUpdateInfo = hasForceUpdatePermission ? new
+                    {
+                        dataCleanupPerformed = true,
+                        recommendedAction = "Tablo verilerini kontrol edin",
+                        backupRecommendation = "Önemli veriler için backup alınması önerilir"
+                    } : null
                 };
 
                 return Ok(response);

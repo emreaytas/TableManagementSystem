@@ -348,6 +348,11 @@ namespace TableManagement.Application.Services
 
 
 
+
+
+
+
+
         private string GetConversionWarningMessage(ColumnDataType from, ColumnDataType to)
         {
             return (from, to) switch
@@ -402,7 +407,6 @@ namespace TableManagement.Application.Services
             };
         }
 
-        // New methods for enhanced update system
         public async Task<ColumnUpdateResult> UpdateColumnDataTypeAsync(string tableName, string columnName, ColumnDataType newDataType, bool forceUpdate, int userId)
         {
             var result = new ColumnUpdateResult();
@@ -412,6 +416,7 @@ namespace TableManagement.Application.Services
             {
                 var secureTableName = GenerateSecureTableName(tableName, userId);
                 var sanitizedColumnName = SanitizeColumnName(columnName);
+                var newSqlDataType = ConvertToSqlDataType(newDataType);
 
                 using var connection = new SqlConnection(_connectionString);
                 await connection.OpenAsync();
@@ -420,23 +425,66 @@ namespace TableManagement.Application.Services
 
                 try
                 {
-                    var newSqlDataType = ConvertToSqlDataType(newDataType);
+                    // 🔥 ADIM 1: Uyumsuz verileri sil (force update durumunda)
+                    if (forceUpdate)
+                    {
+                        string deleteQuery = newDataType switch
+                        {
+                            // STRING -> INT: Sadece tam sayı olmayanları sil
+                            ColumnDataType.Int => $@"
+                        DELETE FROM [{secureTableName}] 
+                        WHERE [{sanitizedColumnName}] IS NOT NULL 
+                        AND LTRIM(RTRIM([{sanitizedColumnName}])) != ''
+                        AND TRY_CAST([{sanitizedColumnName}] AS INT) IS NULL",
+
+                            // STRING -> DECIMAL: Sadece sayı olmayanları sil  
+                            ColumnDataType.Decimal => $@"
+                        DELETE FROM [{secureTableName}] 
+                        WHERE [{sanitizedColumnName}] IS NOT NULL 
+                        AND LTRIM(RTRIM([{sanitizedColumnName}])) != ''
+                        AND TRY_CAST([{sanitizedColumnName}] AS DECIMAL(18,2)) IS NULL",
+
+                            // STRING -> DATETIME: Sadece tarih olmayanları sil
+                            ColumnDataType.DateTime => $@"
+                        DELETE FROM [{secureTableName}] 
+                        WHERE [{sanitizedColumnName}] IS NOT NULL 
+                        AND LTRIM(RTRIM([{sanitizedColumnName}])) != ''
+                        AND TRY_CAST([{sanitizedColumnName}] AS DATETIME) IS NULL",
+
+                            _ => null
+                        };
+
+                        if (!string.IsNullOrEmpty(deleteQuery))
+                        {
+                            using var deleteCommand = new SqlCommand(deleteQuery, connection, transaction);
+                            var deletedRows = await deleteCommand.ExecuteNonQueryAsync();
+
+                            executedQueries.Add($"-- Deleted {deletedRows} incompatible rows");
+                            executedQueries.Add(deleteQuery);
+
+                            _logger.LogInformation("Deleted {DeletedRows} incompatible rows from {TableName}.{ColumnName}",
+                                deletedRows, tableName, columnName);
+                        }
+                    }
+
+                    // 🔥 ADIM 2: Kolon tipini değiştir
                     var alterQuery = $"ALTER TABLE [{secureTableName}] ALTER COLUMN [{sanitizedColumnName}] {newSqlDataType}";
 
-                    using var command = new SqlCommand(alterQuery, connection, transaction);
-                    var affectedRows = await command.ExecuteNonQueryAsync();
+                    using var alterCommand = new SqlCommand(alterQuery, connection, transaction);
+                    await alterCommand.ExecuteNonQueryAsync();
 
                     executedQueries.Add(alterQuery);
 
                     await transaction.CommitAsync();
 
                     result.Success = true;
-                    result.Message = "Kolon veri tipi başarıyla güncellendi";
+                    result.Message = forceUpdate ?
+                        "Kolon tipi güncellendi, uyumsuz veriler silindi" :
+                        "Kolon tipi başarıyla güncellendi";
                     result.ExecutedQueries = executedQueries;
-                    result.AffectedRows = affectedRows;
 
-                    _logger.LogInformation("Column data type updated successfully: {TableName}.{ColumnName} to {NewDataType} for user {UserId}",
-                        secureTableName, sanitizedColumnName, newDataType, userId);
+                    _logger.LogInformation("Column {ColumnName} updated to {NewType} (ForceUpdate: {ForceUpdate})",
+                        columnName, newDataType, forceUpdate);
                 }
                 catch (Exception ex)
                 {
@@ -446,13 +494,15 @@ namespace TableManagement.Application.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error updating column data type: {TableName}.{ColumnName} for user {UserId}",
-                    tableName, columnName, userId);
-                result.Message = "Kolon güncellenirken hata oluştu: " + ex.Message;
+                _logger.LogError(ex, "Error updating column {ColumnName}: {Message}", columnName, ex.Message);
+                result.Success = false;
+                result.Message = "Kolon güncellenemedi: " + ex.Message;
             }
 
             return result;
         }
+
+
 
         public async Task<ColumnValidationResult> ValidateColumnDataTypeChangeAsync(
     string tableName, string columnName, ColumnDataType currentType, ColumnDataType newType, int userId)

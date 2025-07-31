@@ -7,6 +7,7 @@ using Microsoft.OpenApi.Models;
 using Serilog;
 using Serilog.Events;
 using System.Text;
+using System.Text.Json.Serialization;
 using TableManagement.API.Middleware;
 using TableManagement.Application;
 using TableManagement.Application.Services;
@@ -216,6 +217,10 @@ try
         logging.ResponseBodyLogLimit = 4096;
     });
     builder.Services.AddScoped<IExcelService, ExcelService>();
+    builder.Services.ConfigureHttpJsonOptions(options =>
+    {
+        options.SerializerOptions.ReferenceHandler = ReferenceHandler.IgnoreCycles;
+    });
 
     var app = builder.Build();
 

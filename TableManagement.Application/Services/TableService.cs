@@ -591,114 +591,272 @@ namespace TableManagement.Application.Services
 
                 _logger.LogInformation("🔄 Starting table update for table {TableName} (ID: {TableId})", table.TableName, tableId);
 
+                // Fiziksel tablo ismini bul
+                var physicalTableName = await FindPhysicalTableNameAsync(table.TableName, userId);
+                if (string.IsNullOrEmpty(physicalTableName))
+                {
+                    result.Message = "Fiziksel tablo bulunamadı.";
+                    return result;
+                }
+
                 var existingColumns = table.Columns.ToList();
                 var newColumns = request.Columns;
 
-                // 🔥 KOLON DEĞİŞİKLİKLERİNİ İŞLE
-                foreach (var modifiedColumn in newColumns.Where(c => c.ColumnId.HasValue && c.ColumnId > 0))
+                _logger.LogInformation("📊 Column comparison - Existing: {ExistingCount}, New: {NewCount}",
+                    existingColumns.Count, newColumns?.Count ?? 0);
+
+                // 🔥 1. TABLO İSMİ DEĞİŞİKLİĞİ KONTROLÜ VE FİZİKSEL TABLO RENAME İŞLEMİ
+                string? newPhysicalTableName = null;
+                var originalTableName = table.TableName;
+
+                if (!string.IsNullOrEmpty(request.TableName) && originalTableName != request.TableName)
                 {
-                    var existingColumn = existingColumns.FirstOrDefault(ec => ec.Id == modifiedColumn.ColumnId);
-                    if (existingColumn == null) continue;
+                    _logger.LogInformation("🏷️ Table name change detected: {OldName} -> {NewName}", originalTableName, request.TableName);
 
-                    // 🔥 VERİ TİPİ DEĞİŞİKLİĞİ
-                    if (existingColumn.DataType != modifiedColumn.DataType)
+                    // Yeni fiziksel tablo ismini oluştur
+                    newPhysicalTableName = _dataDefinitionService.GenerateSecureTableName(request.TableName, userId);
+
+                    _logger.LogInformation("🏷️ Physical table rename: {OldPhysical} -> {NewPhysical}", physicalTableName, newPhysicalTableName);
+
+                    // Fiziksel tabloyu yeniden adlandır
+                    var renameResult = await _dataDefinitionService.RenamePhysicalTableAsync(physicalTableName, request.TableName, userId);
+
+                    if (!renameResult)
                     {
-                        _logger.LogInformation("🔄 Data type change: {ColumnName} from {OldType} to {NewType}",
-                            existingColumn.ColumnName, existingColumn.DataType, modifiedColumn.DataType);
-
-                        var forceUpdate = modifiedColumn.ForceUpdate == true;
-
-                        // 🔥 FİZİKSEL TABLODA VERİ TİPİNİ DEĞİŞTİR
-                        var columnUpdateResult = await _dataDefinitionService.UpdateColumnDataTypeAsync(
-                            table.TableName, existingColumn.ColumnName, modifiedColumn.DataType, forceUpdate, userId);
-
-                        if (!columnUpdateResult.Success)
-                        {
-                            result.Message = $"Kolon {existingColumn.ColumnName} fiziksel güncelleme hatası: {columnUpdateResult.Message}";
-                            return result;
-                        }
-
-                        executedQueries.AddRange(columnUpdateResult.ExecutedQueries);
-                        totalAffectedRows += columnUpdateResult.AffectedRows;
-
-                        // ✅ METADATA'YI GÜNCELLE
-                        existingColumn.DataType = modifiedColumn.DataType;
-                        existingColumn.UpdatedAt = DateTime.UtcNow;
-
-                        _logger.LogInformation("✅ Column {ColumnName} type updated successfully to {NewType}",
-                            existingColumn.ColumnName, modifiedColumn.DataType);
+                        result.Message = "Fiziksel tablo ismi değiştirilemedi.";
+                        await _unitOfWork.RollbackTransactionAsync();
+                        return result;
                     }
 
-                    // 🔥 KOLON ADI DEĞİŞİKLİĞİ
-                    if (existingColumn.ColumnName != modifiedColumn.ColumnName)
-                    {
-                        var renameSuccess = await _dataDefinitionService.RenameColumnAsync(
-                            table.TableName, existingColumn.ColumnName, modifiedColumn.ColumnName, userId);
-
-                        if (!renameSuccess)
-                        {
-                            result.Message = $"Kolon adı değiştirilemedi: {existingColumn.ColumnName} -> {modifiedColumn.ColumnName}";
-                            return result;
-                        }
-
-                        existingColumn.ColumnName = modifiedColumn.ColumnName;
-                        existingColumn.UpdatedAt = DateTime.UtcNow;
-                    }
-
-                    // 🔥 REQUIRED/NULL DEĞİŞİKLİĞİ
-                    if (existingColumn.IsRequired != modifiedColumn.IsRequired)
-                    {
-                        var nullabilitySuccess = await _dataDefinitionService.UpdateColumnNullabilityAsync(
-                            table.TableName, existingColumn.ColumnName, modifiedColumn.IsRequired, userId);
-
-                        if (!nullabilitySuccess)
-                        {
-                            result.Message = $"Kolon null durumu güncellenemedi: {existingColumn.ColumnName}";
-                            return result;
-                        }
-
-                        existingColumn.IsRequired = modifiedColumn.IsRequired;
-                        existingColumn.UpdatedAt = DateTime.UtcNow;
-                    }
-
-                    // Diğer metadata güncellemeleri
-                    existingColumn.DisplayOrder = modifiedColumn.DisplayOrder;
-                    existingColumn.DefaultValue = modifiedColumn.DefaultValue ?? "";
+                    executedQueries.Add($"Fiziksel tablo ismi değiştirildi: {physicalTableName} -> {newPhysicalTableName}");
+                    physicalTableName = newPhysicalTableName;
                 }
 
-                // 🔥 TABLO METADATA GÜNCELLEMESİ
+                // 🔥 2. KOLON İŞLEMLERİ
+                if (newColumns != null && newColumns.Any())
+                {
+                    // 🔥 2.1. SİLİNECEK KOLONLARI BUL VE SİL (İkinci metodun mantığı)
+                    var columnsToDelete = existingColumns.Where(ec =>
+                        !newColumns.Any(nc => nc.ColumnId == ec.Id)).ToList();
+
+                    foreach (var columnToDelete in columnsToDelete)
+                    {
+                        _logger.LogInformation("🗑️ Deleting column: {ColumnName}", columnToDelete.ColumnName);
+
+                        var deleteResult = await _dataDefinitionService.DropColumnDirectAsync(physicalTableName, columnToDelete.ColumnName);
+
+                        if (deleteResult.Success)
+                        {
+                            executedQueries.Add($"Column dropped: {columnToDelete.ColumnName}");
+                            totalAffectedRows += deleteResult.AffectedRows;
+
+                            // Metadata'dan da sil
+                            table.Columns.Remove(columnToDelete);
+
+                            _logger.LogInformation("✅ Column {ColumnName} deleted successfully", columnToDelete.ColumnName);
+                        }
+                        else
+                        {
+                            result.Message = $"Kolon silinemedi: {columnToDelete.ColumnName} - {deleteResult.Message}";
+                            await _unitOfWork.RollbackTransactionAsync();
+                            return result;
+                        }
+                    }
+
+                    // 🔥 2.2. YENİ KOLONLARI EKLE (İkinci metodun mantığı)
+                    var newColumnRequests = newColumns.Where(nc =>
+                        nc.ColumnId == null || nc.ColumnId == 0 ||
+                        !existingColumns.Any(ec => ec.Id == nc.ColumnId)).ToList();
+
+                    foreach (var newColumn in newColumnRequests)
+                    {
+                        _logger.LogInformation("➕ Adding new column: {ColumnName}", newColumn.ColumnName);
+
+                        var addResult = await _dataDefinitionService.AddColumnDirectAsync(physicalTableName, newColumn);
+
+                        if (addResult.Success)
+                        {
+                            executedQueries.AddRange(addResult.ExecutedQueries ?? new List<string>());
+                            totalAffectedRows += addResult.AffectedRows;
+
+                            // Metadata'ya da ekle
+                            var newColumnEntity = new CustomColumn
+                            {
+                                ColumnName = newColumn.ColumnName,
+                                DataType = newColumn.DataType,
+                                IsRequired = newColumn.IsRequired,
+                                DisplayOrder = newColumn.DisplayOrder,
+                                DefaultValue = newColumn.DefaultValue ?? "",
+                                CustomTableId = table.Id,
+                                CreatedAt = DateTime.UtcNow,
+                                UpdatedAt = DateTime.UtcNow
+                            };
+
+                            table.Columns.Add(newColumnEntity);
+
+                            _logger.LogInformation("✅ Column {ColumnName} added successfully", newColumn.ColumnName);
+                        }
+                        else
+                        {
+                            result.Message = $"Kolon eklenemedi: {newColumn.ColumnName} - {addResult.Message}";
+                            await _unitOfWork.RollbackTransactionAsync();
+                            return result;
+                        }
+                    }
+
+                    // 🔥 2.3. MEVCUT KOLONLARI GÜNCELLE (İlk metodun TAM mantığı - çalışıyor!)
+                    foreach (var modifiedColumn in newColumns.Where(c => c.ColumnId.HasValue && c.ColumnId > 0))
+                    {
+                        var existingColumn = existingColumns.FirstOrDefault(ec => ec.Id == modifiedColumn.ColumnId);
+                        if (existingColumn == null) continue;
+
+                        // 🔥 VERİ TİPİ DEĞİŞİKLİĞİ
+                        if (existingColumn.DataType != modifiedColumn.DataType)
+                        {
+                            _logger.LogInformation("🔄 Data type change: {ColumnName} from {OldType} to {NewType}",
+                                existingColumn.ColumnName, existingColumn.DataType, modifiedColumn.DataType);
+
+                            var forceUpdate = modifiedColumn.ForceUpdate == true;
+
+                            // FİZİKSEL TABLODA VERİ TİPİNİ DEĞİŞTİR
+                            var columnUpdateResult = await _dataDefinitionService.UpdateColumnDataTypeAsync(
+                                table.TableName, existingColumn.ColumnName, modifiedColumn.DataType, forceUpdate, userId);
+
+                            if (!columnUpdateResult.Success)
+                            {
+                                result.Message = $"Kolon {existingColumn.ColumnName} fiziksel güncelleme hatası: {columnUpdateResult.Message}";
+                                await _unitOfWork.RollbackTransactionAsync();
+                                return result;
+                            }
+
+                            executedQueries.AddRange(columnUpdateResult.ExecutedQueries);
+                            totalAffectedRows += columnUpdateResult.AffectedRows;
+
+                            // METADATA'YI GÜNCELLE
+                            existingColumn.DataType = modifiedColumn.DataType;
+                            existingColumn.UpdatedAt = DateTime.UtcNow;
+
+                            _logger.LogInformation("✅ Column {ColumnName} type updated successfully to {NewType}",
+                                existingColumn.ColumnName, modifiedColumn.DataType);
+                        }
+
+                        // 🔥 KOLON ADI DEĞİŞİKLİĞİ
+                        if (existingColumn.ColumnName != modifiedColumn.ColumnName)
+                        {
+                            _logger.LogInformation("🔄 Column rename: {OldName} -> {NewName}",
+                                existingColumn.ColumnName, modifiedColumn.ColumnName);
+
+                            var renameSuccess = await _dataDefinitionService.RenameColumnAsync(
+                                table.TableName, existingColumn.ColumnName, modifiedColumn.ColumnName, userId);
+
+                            if (!renameSuccess)
+                            {
+                                result.Message = $"Kolon adı değiştirilemedi: {existingColumn.ColumnName} -> {modifiedColumn.ColumnName}";
+                                await _unitOfWork.RollbackTransactionAsync();
+                                return result;
+                            }
+
+                            executedQueries.Add($"Column renamed: {existingColumn.ColumnName} -> {modifiedColumn.ColumnName}");
+                            existingColumn.ColumnName = modifiedColumn.ColumnName;
+                            existingColumn.UpdatedAt = DateTime.UtcNow;
+
+                            _logger.LogInformation("✅ Column renamed successfully: {NewName}", modifiedColumn.ColumnName);
+                        }
+
+                        // 🔥 REQUIRED/NULL DEĞİŞİKLİĞİ
+                        if (existingColumn.IsRequired != modifiedColumn.IsRequired)
+                        {
+                            _logger.LogInformation("🔄 Nullability change: {ColumnName} IsRequired: {OldValue} -> {NewValue}",
+                                existingColumn.ColumnName, existingColumn.IsRequired, modifiedColumn.IsRequired);
+
+                            var nullabilitySuccess = await _dataDefinitionService.UpdateColumnNullabilityAsync(
+                                table.TableName, existingColumn.ColumnName, modifiedColumn.IsRequired, userId);
+
+                            if (!nullabilitySuccess)
+                            {
+                                result.Message = $"Kolon null durumu güncellenemedi: {existingColumn.ColumnName}";
+                                await _unitOfWork.RollbackTransactionAsync();
+                                return result;
+                            }
+
+                            executedQueries.Add($"Column nullability updated: {existingColumn.ColumnName}");
+                            existingColumn.IsRequired = modifiedColumn.IsRequired;
+                            existingColumn.UpdatedAt = DateTime.UtcNow;
+
+                            _logger.LogInformation("✅ Column nullability updated: {ColumnName}", existingColumn.ColumnName);
+                        }
+
+                        // 🔥 DEFAULT VALUE DEĞİŞİKLİĞİ
+                        if (existingColumn.DefaultValue != (modifiedColumn.DefaultValue ?? ""))
+                        {
+                            _logger.LogInformation("🔄 Default value change: {ColumnName} from '{OldValue}' to '{NewValue}'",
+                                existingColumn.ColumnName, existingColumn.DefaultValue, modifiedColumn.DefaultValue);
+
+                            var defaultValueSuccess = await _dataDefinitionService.UpdateColumnDefaultValueAsync(
+                                table.TableName, existingColumn.ColumnName, modifiedColumn.DefaultValue ?? "", userId);
+
+                            if (!defaultValueSuccess)
+                            {
+                                _logger.LogWarning("⚠️ Default value update failed for column: {ColumnName}", existingColumn.ColumnName);
+                                // Default value hatası kritik değil, devam et
+                            }
+                            else
+                            {
+                                executedQueries.Add($"Column default value updated: {existingColumn.ColumnName}");
+                                _logger.LogInformation("✅ Default value updated: {ColumnName}", existingColumn.ColumnName);
+                            }
+
+                            existingColumn.DefaultValue = modifiedColumn.DefaultValue ?? "";
+                            existingColumn.UpdatedAt = DateTime.UtcNow;
+                        }
+
+                        // 🔥 DISPLAY ORDER DEĞİŞİKLİĞİ
+                        if (existingColumn.DisplayOrder != modifiedColumn.DisplayOrder)
+                        {
+                            existingColumn.DisplayOrder = modifiedColumn.DisplayOrder;
+                            existingColumn.UpdatedAt = DateTime.UtcNow;
+                        }
+                    }
+
+                    _logger.LogInformation("🔧 Column operations completed successfully. " +
+                        "Added: {AddedCount}, Updated columns processed, Deleted: {DeletedCount}",
+                        newColumnRequests.Count, columnsToDelete.Count);
+                }
+
+                // 🔥 3. TABLO BİLGİLERİNİ GÜNCELLE (CustomTables tablosunda)
                 table.TableName = request.TableName;
                 table.Description = request.Description;
                 table.UpdatedAt = DateTime.UtcNow;
 
-                // ✅ DEĞIŞIKLIKLERI KAYDET
                 await _unitOfWork.SaveChangesAsync();
                 await _unitOfWork.CommitTransactionAsync();
 
                 result.Success = true;
                 result.Message = "Tablo başarıyla güncellendi";
-
-                // 🔥 ÖNEMLİ: CIRCULAR REFERENCE'DAN KAÇINMAK İÇİN SADECE DTO DÖNDÜR
-                // result.Table = table; // ← BU SATIN SİL!
-
+                result.Table = _mapper.Map<TableResponse>(table);
                 result.ExecutedQueries = executedQueries;
                 result.AffectedRows = totalAffectedRows;
 
-                _logger.LogInformation("🎉 Table {TableName} updated successfully. Executed queries: {QueryCount}",
-                    table.TableName, executedQueries.Count);
+                _logger.LogInformation("🎉 Table {TableId} updated successfully by user {UserId}. Executed {QueryCount} operations",
+                    tableId, userId, executedQueries.Count);
+
+                // İsim değiştirme işlemini logla
+                if (newPhysicalTableName != null)
+                {
+                    _logger.LogInformation("🎉 Physical table renamed successfully: {OldName} -> {NewName}",
+                        originalTableName, request.TableName);
+                }
 
                 return result;
             }
             catch (Exception ex)
             {
                 await _unitOfWork.RollbackTransactionAsync();
-                _logger.LogError(ex, "❌ Error updating table {TableId}: {Message}", tableId, ex.Message);
-
+                _logger.LogError(ex, "💥 Error updating table {TableId} by user {UserId}", tableId, userId);
                 result.Message = "Tablo güncellenirken hata oluştu: " + ex.Message;
                 return result;
             }
         }
-        // Fiziksel tablo adını bulan geliştirilmiş metod
         private async Task<string?> FindPhysicalTableNameAsync(string logicalTableName, int userId)
         {
             try
